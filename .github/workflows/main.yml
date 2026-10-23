@@ -21,7 +21,7 @@ on:
 
 env:
   OPENWRT_NAME: ImmortalWrt
-  REPO: googlewmb/hinlink-all
+  REPO: googlewmb/immortalwrt-hinlink-all
   REPO_URL: https://github.com/immortalwrt/immortalwrt
   REPO_BRANCH: ${{ github.event.inputs.source_ref || 'master' }}
   DIY_P1_SH: diy-part1.sh
@@ -103,27 +103,26 @@ jobs:
           git clone --depth 1 -b "${REPO_BRANCH}" "${REPO_URL}" openwrt
           echo "官方源码 commit: $(git -C openwrt rev-parse --short HEAD)"
 
-      # ========== 2. 自动注入 Beaverfffan 适配层（含完整 U-Boot）==========
-      - name: 注入 Beaverfffan 适配层
+      # ========== 2. 注入本仓库适配层（含完整 U-Boot）==========
+      - name: 注入本仓库适配层
         run: |
           set -e
-          echo "正在拉取 Beaverfffan 适配层..."
-          git clone --depth 1 https://github.com/Beaverfffan/immortalwrt-hinlink.git hinlink-adapt
+          echo "正在注入本仓库适配层..."
 
           # ---------- 2.1 设备树 + 板级文件 ----------
           echo ">>> 复制 DTS / board.d / 其他 rockchip 文件"
-          cp -rf hinlink-adapt/target/linux/rockchip/* openwrt/target/linux/rockchip/
+          cp -rf target/linux/rockchip/* openwrt/target/linux/rockchip/
 
           # ---------- 2.2 自定义包（风扇 / OLED / 5G复位 / aic8800 等）----------
           echo ">>> 复制 package/beaverfffan"
           mkdir -p openwrt/package/beaverfffan
-          cp -rf hinlink-adapt/package/beaverfffan/* openwrt/package/beaverfffan/
+          cp -rf package/beaverfffan/* openwrt/package/beaverfffan/
 
           # ---------- 2.3 内核 patch ----------
           echo ">>> 复制内核 patch"
-          if [ -d hinlink-adapt/patches ]; then
+          if [ -d patches ]; then
             mkdir -p openwrt/target/linux/rockchip/patches-6.18
-            cp -f hinlink-adapt/patches/*.patch openwrt/target/linux/rockchip/patches-6.18/ 2>/dev/null || true
+            cp -f patches/*.patch openwrt/target/linux/rockchip/patches-6.18/ 2>/dev/null || true
           fi
 
           # ---------- 2.4 U-Boot（严格按官方 README §七）----------
@@ -132,22 +131,22 @@ jobs:
           mkdir -p "${UBOOT_PKG}/patches"
 
           # 2.4.1 上游已有的 H28K / H66K / H68K 补丁
-          if [ -d hinlink-adapt/patches-uboot/upstream ]; then
+          if [ -d patches-uboot/upstream ]; then
             echo "  - 复制 upstream/*.patch"
-            cp -f hinlink-adapt/patches-uboot/upstream/*.patch "${UBOOT_PKG}/patches/"
+            cp -f patches-uboot/upstream/*.patch "${UBOOT_PKG}/patches/"
           fi
 
           # 2.4.2 H29K / HT2（108）+ RK3588（109）板级补丁 → 直接放进 patches/
-          for p in hinlink-adapt/patches-uboot/108-*.patch hinlink-adapt/patches-uboot/109-*.patch; do
+          for p in patches-uboot/108-*.patch patches-uboot/109-*.patch; do
             [ -f "$p" ] || continue
             cp -f "$p" "${UBOOT_PKG}/patches/"
             echo "  - 已复制 $(basename "$p")"
           done
 
-          # 2.4.3 登记 8 个变体到 Makefile（0001）——必须在 openwrt 根目录打
-          if ls hinlink-adapt/patches-uboot/0001-*.patch 1>/dev/null 2>&1; then
+          # 2.4.3 登记设备到 Makefile（0001）——必须在 openwrt 根目录打
+          if ls patches-uboot/0001-*.patch 1>/dev/null 2>&1; then
             echo "  - 应用 0001-register-hinlink-devices.patch"
-            for p in hinlink-adapt/patches-uboot/0001-*.patch; do
+            for p in patches-uboot/0001-*.patch; do
               echo "    patch: $p"
               # 正确：-d openwrt（根目录），不是 uboot-rockchip 子目录
               patch -p1 -d openwrt < "$p" || {
@@ -173,9 +172,9 @@ jobs:
 
           # ---------- 2.5 追加设备定义（armv8.mk）----------
           echo ">>> 追加 armv8.mk.hinlink"
-          if [ -f hinlink-adapt/target/linux/rockchip/image/armv8.mk.hinlink ]; then
+          if [ -f target/linux/rockchip/image/armv8.mk.hinlink ]; then
             if ! grep -q 'Device/hinlink\|hinlink_opc-h68k\|hinlink_h28k' openwrt/target/linux/rockchip/image/armv8.mk 2>/dev/null; then
-              cat hinlink-adapt/target/linux/rockchip/image/armv8.mk.hinlink \
+              cat target/linux/rockchip/image/armv8.mk.hinlink \
                 >> openwrt/target/linux/rockchip/image/armv8.mk
               echo "  已追加 armv8.mk.hinlink"
             else
@@ -379,7 +378,7 @@ jobs:
           touch release.txt
           echo "由衷感谢所有为 openwrt 无私奉献的大佬们" >> release.txt
           echo "主源码: immortalwrt/immortalwrt (${{ env.REPO_BRANCH }})" >> release.txt
-          echo "适配来源: Beaverfffan/immortalwrt-hinlink" >> release.txt
+          echo "适配来源: googlewmb/immortalwrt-hinlink-all" >> release.txt
           echo "当前配置: ${{ matrix.config }}" >> release.txt
           echo "📥 固件下载" >> release.txt
 
