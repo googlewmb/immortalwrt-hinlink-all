@@ -53,7 +53,7 @@ echo "========================================"
 
 # 1.2 移除官方旧库
 # PassWall 已由 DIY1 拉取到 package/myapp，这里不重复拉取
-rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,v2ray-plugin,xray-plugin,geoview,shadow-tls}
+rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,v2ray-plugin,xray-plugin,geoview,shadow-tls,dae,daed}
 rm -rf feeds/luci/applications/luci-app-passwall
 
 # DIY1 已下载：
