@@ -83,11 +83,12 @@ jobs:
           }
 
           if not ROOT.is_dir():
-              sys.exit("错误：找不到 configs/ 目录。")
+              sys.exit("错误：找不到仓库根目录下的 configs/ 目录。")
 
-          # 只选择普通 .config，排除所有 .config.full.config
+          # 只扫描 configs/ 目录直属的普通 .config 文件。
+          # 排除 .config.full.config，不递归扫描其他子目录。
           files = sorted(
-              p for p in ROOT.rglob("*.config")
+              p for p in ROOT.glob("*.config")
               if p.is_file()
               and not p.name.endswith(".config.full.config")
           )
@@ -235,12 +236,16 @@ jobs:
 
               if (
                   not filename.startswith("configs/")
+                  or path.parent != Path("configs")
                   or not path.name.endswith(".config")
                   or path.name.endswith(".config.full.config")
               ):
                   sys.exit(f"安全检查失败：禁止修改此文件：{filename}")
 
-          print(f"安全检查通过：仅涉及 {len(changed)} 个 configs/ 下的普通 .config 文件。")
+          print(
+              f"安全检查通过：仅涉及 {len(changed)} 个 "
+              "configs/ 下的普通 .config 文件。"
+          )
           PY
 
       - name: Commit and push
