@@ -91,10 +91,41 @@ nikki
 #https://github.com/nikkinikki-org/OpenWrt-momo.git \
 #momo
 
-# Daed
-#git clone -b master --depth 1 \
-#https://github.com/QiuSimons/luci-app-daed.git \
-#daed
+###############################################################################
+# dae / daed / luci-app-daede
+# 来源：https://github.com/kenzok8/openwrt-daede
+###############################################################################
+
+echo "下载 kenzok8/openwrt-daede"
+
+DAEDE_TMP=".openwrt-daede-src"
+
+git clone -b main --depth 1 \
+https://github.com/kenzok8/openwrt-daede.git \
+"$DAEDE_TMP"
+
+# 检查所需软件包目录
+for pkg in dae daed luci-app-daede; do
+    if [ ! -d "$DAEDE_TMP/$pkg" ]; then
+        echo "ERROR: openwrt-daede 缺少软件包目录: $pkg"
+        exit 1
+    fi
+
+    if [ -e "$pkg" ] || [ -L "$pkg" ]; then
+        echo "ERROR: 目标目录已存在，拒绝覆盖: package/myapp/$pkg"
+        exit 1
+    fi
+done
+
+# 将三个软件包放到 package/myapp 一级目录
+mv "$DAEDE_TMP/dae" ./dae
+mv "$DAEDE_TMP/daed" ./daed
+mv "$DAEDE_TMP/luci-app-daede" ./luci-app-daede
+
+# 删除临时仓库
+rm -rf "$DAEDE_TMP"
+
+echo "已添加 dae、daed、luci-app-daede"
 
 # Aurora
 #git clone -b master --depth 1 \
@@ -151,9 +182,9 @@ echo 'src-git small https://github.com/kenzok8/small.git' >> feeds.conf.default
 
 echo "package/myapp:"
 find package/myapp \
--maxdepth 1 \
--mindepth 1 \
--type d \
--printf '%f\n' | sort
+    -maxdepth 1 \
+    -mindepth 1 \
+    -type d \
+    -printf '%f\n' | sort
 
 echo "DIY1 OK"
