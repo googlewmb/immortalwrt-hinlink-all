@@ -1,1 +1,442 @@
+name: HINLINK-ALL
 
+permissions: write-all
+
+on:
+  workflow_dispatch:
+    inputs:
+      BUILD_CONFIG_ONLY:
+        description: '仅输出完整配置，不编译固件'
+        required: true
+        default: false
+        type: boolean
+      source_ref:
+        description: '官方 ImmortalWrt 分支或 commit（默认 master）'
+        required: false
+        default: 'master'
+        type: string
+
+  schedule:
+    - cron: "16 16 * * *"
+
+env:
+  OPENWRT_NAME: ImmortalWrt
+  REPO: googlewmb/hinlink-all
+  REPO_URL: https://github.com/immortalwrt/immortalwrt
+  REPO_BRANCH: ${{ github.event.inputs.source_ref || 'master' }}
+  DIY_P1_SH: diy-part1.sh
+  DIY_P2_SH: diy-part3.sh
+  UPLOAD_BIN: true
+  UPLOAD_FIRMWARE: true
+  UPLOAD_RELEASE: true
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        config:
+          - h28k.config
+          - h29k-v1.3-1.14.config
+          - h29k-v5-1.14.config
+          - h29k-v5-1.49.config
+          - h66k.config
+          - h68k-a-b-usb.config
+          - h68k-a-b.config
+          - h68k-c-d-f-usb.config
+          - h68k-c-d-f.config
+          - h68k-new.config
+          - h69k-mini.config
+          - h69k.config
+          - h88k-v2.config
+          - h88k-v3.config
+          - h89k.config
+          - ht2.config
+      fail-fast: false
+
+    env:
+      CONFIG_BUILD: configs/${{ matrix.config }}
+      BUILD_CONFIG_ONLY: ${{ github.event.inputs.BUILD_CONFIG_ONLY || 'false' }}
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 释放Ubuntu磁盘空间
+        uses: coder-xiaomo/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: 加载项目文件
+        uses: actions/checkout@main
+
+      - name: 初始化编译环境
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get full-upgrade -y
+          sudo apt-get install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+            bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib \
+            g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev \
+            libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev \
+            libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano \
+            ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils \
+            python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs \
+            upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
+
+      - name: 设置当前的日期
+        run: |
+          sudo timedatectl set-timezone "$TZ"
+          echo "date1=$(date +'%Y.%m.%d-%H.%M')" >> "$GITHUB_ENV"
+          echo "date2=$(date +'%Y.%m.%d')" >> "$GITHUB_ENV"
+          echo "date3=$(date +'%Y年%m月%d日')" >> "$GITHUB_ENV"
+
+      # ========== 1. 克隆官方 ImmortalWrt ==========
+      - name: 下载官方 ImmortalWrt 源码
+        run: |
+          git clone --depth 1 -b "${REPO_BRANCH}" "${REPO_URL}" openwrt
+          echo "官方源码 commit: $(git -C openwrt rev-parse --short HEAD)"
+
+      # ========== 2. 自动注入 Beaverfffan 适配层（含完整 U-Boot）==========
+      - name: 注入 Beaverfffan 适配层
+        run: |
+          set -e
+          echo "正在拉取 Beaverfffan 适配层..."
+          git clone --depth 1 https://github.com/Beaverfffan/immortalwrt-hinlink.git hinlink-adapt
+
+          # ---------- 2.1 设备树 + 板级文件 ----------
+          echo ">>> 复制 DTS / board.d / 其他 rockchip 文件"
+          cp -rf hinlink-adapt/target/linux/rockchip/* openwrt/target/linux/rockchip/
+
+          # ---------- 2.2 自定义包（风扇 / OLED / 5G复位 / aic8800 等）----------
+          echo ">>> 复制 package/beaverfffan"
+          mkdir -p openwrt/package/beaverfffan
+          cp -rf hinlink-adapt/package/beaverfffan/* openwrt/package/beaverfffan/
+
+          # ---------- 2.3 内核 patch ----------
+          echo ">>> 复制内核 patch"
+          if [ -d hinlink-adapt/patches ]; then
+            mkdir -p openwrt/target/linux/rockchip/patches-6.18
+            cp -f hinlink-adapt/patches/*.patch openwrt/target/linux/rockchip/patches-6.18/ 2>/dev/null || true
+          fi
+
+          # ---------- 2.4 U-Boot（严格按官方 README §七）----------
+          echo ">>> 注入 U-Boot 支持（出固件必需）"
+          UBOOT_PKG="openwrt/package/boot/uboot-rockchip"
+          mkdir -p "${UBOOT_PKG}/patches"
+
+          # 2.4.1 上游已有的 H28K / H66K / H68K 补丁
+          if [ -d hinlink-adapt/patches-uboot/upstream ]; then
+            echo "  - 复制 upstream/*.patch"
+            cp -f hinlink-adapt/patches-uboot/upstream/*.patch "${UBOOT_PKG}/patches/"
+          fi
+
+          # 2.4.2 H29K / HT2（108）+ RK3588（109）板级补丁 → 直接放进 patches/
+          for p in hinlink-adapt/patches-uboot/108-*.patch hinlink-adapt/patches-uboot/109-*.patch; do
+            [ -f "$p" ] || continue
+            cp -f "$p" "${UBOOT_PKG}/patches/"
+            echo "  - 已复制 $(basename "$p")"
+          done
+
+          # 2.4.3 登记 8 个变体到 Makefile（0001）——必须在 openwrt 根目录打
+          if ls hinlink-adapt/patches-uboot/0001-*.patch 1>/dev/null 2>&1; then
+            echo "  - 应用 0001-register-hinlink-devices.patch"
+            for p in hinlink-adapt/patches-uboot/0001-*.patch; do
+              echo "    patch: $p"
+              # 正确：-d openwrt（根目录），不是 uboot-rockchip 子目录
+              patch -p1 -d openwrt < "$p" || {
+                echo "错误：0001 补丁应用失败"
+                exit 1
+              }
+            done
+          else
+            echo "错误：找不到 0001 补丁！"
+            exit 1
+          fi
+
+          # 2.4.4 验证登记是否成功
+          echo ">>> 验证 U-Boot Makefile 中的 hinlink 条目："
+          if ! grep -q 'hinlink-h68k-rk3568\|hinlink-h28k-rk3528' "${UBOOT_PKG}/Makefile"; then
+            echo "错误：0001 补丁应用后 Makefile 仍无 hinlink 定义！"
+            exit 1
+          fi
+          grep -n 'hinlink' "${UBOOT_PKG}/Makefile" | head -30
+
+          echo ">>> 当前 uboot-rockchip/patches 列表:"
+          ls -1 "${UBOOT_PKG}/patches/" | sort
+
+          # ---------- 2.5 追加设备定义（armv8.mk）----------
+          echo ">>> 追加 armv8.mk.hinlink"
+          if [ -f hinlink-adapt/target/linux/rockchip/image/armv8.mk.hinlink ]; then
+            if ! grep -q 'Device/hinlink\|hinlink_opc-h68k\|hinlink_h28k' openwrt/target/linux/rockchip/image/armv8.mk 2>/dev/null; then
+              cat hinlink-adapt/target/linux/rockchip/image/armv8.mk.hinlink \
+                >> openwrt/target/linux/rockchip/image/armv8.mk
+              echo "  已追加 armv8.mk.hinlink"
+            else
+              echo "  armv8.mk 已包含 hinlink 定义，跳过追加"
+            fi
+          fi
+
+          echo "========== 适配层注入完成 =========="
+          echo "DTS 中的 hinlink 文件:"
+          ls openwrt/target/linux/rockchip/files/arch/arm64/boot/dts/rockchip/ 2>/dev/null | grep -i hinlink || echo "(无)"
+
+      # ========== 3. 执行 diy-part1 ==========
+      - name: 执行DIY_P1_SH
+        run: |
+          chmod +x "${GITHUB_WORKSPACE}/${DIY_P1_SH}"
+          cd openwrt
+          "${GITHUB_WORKSPACE}/${DIY_P1_SH}"
+
+      # ========== 4. 更新 feeds ==========
+      - name: 更新feeds
+        working-directory: ./openwrt
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          # 再次确保冲突包被卸载（使用 beaverfffan 自己的）
+          ./scripts/feeds uninstall fancontrol luci-app-fancontrol luci-app-oled 2>/dev/null || true
+
+      # ========== 5. 加载机型配置 + diy-part3 + 强制正确 U-Boot 包名 ==========
+      - name: 加载config 执行DIY_P2_SH defconfig
+        run: |
+          set -e
+          if [ -e "${CONFIG_BUILD}" ]; then
+            cp "${CONFIG_BUILD}" openwrt/.config
+            echo "已加载配置: ${CONFIG_BUILD}"
+          else
+            echo "错误：找不到配置文件 ${CONFIG_BUILD}"
+            ls -la configs/ || true
+            exit 1
+          fi
+
+          chmod +x "${GITHUB_WORKSPACE}/${DIY_P2_SH}"
+          cd openwrt
+          "${GITHUB_WORKSPACE}/${DIY_P2_SH}"
+
+          # ★ 关键：强制打开正确的 U-Boot 包名（是 u-boot- 不是 uboot-rockchip-）
+          # 同时打开对应 SoC 的 trusted-firmware-a（否则会缺 ATF/TPL 二进制）
+          CFG="${{ matrix.config }}"
+          case "$CFG" in
+            h28k.config)
+              echo "CONFIG_PACKAGE_u-boot-hinlink-h28k-rk3528=y" >> .config
+              echo "CONFIG_PACKAGE_trusted-firmware-a-rk3528=y" >> .config
+              ;;
+            h29k-v1.3-1.14.config|h29k-v5-1.14.config|h29k-v5-1.49.config)
+              echo "CONFIG_PACKAGE_u-boot-hinlink-h29k-rk3528=y" >> .config
+              echo "CONFIG_PACKAGE_trusted-firmware-a-rk3528=y" >> .config
+              ;;
+            ht2.config)
+              echo "CONFIG_PACKAGE_u-boot-hinlink-ht2-rk3528=y" >> .config
+              echo "CONFIG_PACKAGE_trusted-firmware-a-rk3528=y" >> .config
+              ;;
+            h66k.config)
+              echo "CONFIG_PACKAGE_u-boot-hinlink-h66k-rk3568=y" >> .config
+              echo "CONFIG_PACKAGE_trusted-firmware-a-rk3568=y" >> .config
+              ;;
+            h68k-a-b.config|h68k-a-b-usb.config|h68k-c-d-f.config|h68k-c-d-f-usb.config|h68k-new.config|h69k.config|h69k-mini.config)
+              echo "CONFIG_PACKAGE_u-boot-hinlink-h68k-rk3568=y" >> .config
+              echo "CONFIG_PACKAGE_trusted-firmware-a-rk3568=y" >> .config
+              ;;
+            h88k-v2.config)
+              echo "CONFIG_PACKAGE_u-boot-hinlink-h88k-v2-rk3588=y" >> .config
+              echo "CONFIG_PACKAGE_trusted-firmware-a-rk3588=y" >> .config
+              ;;
+            h88k-v3.config)
+              echo "CONFIG_PACKAGE_u-boot-hinlink-h88k-v3-rk3588=y" >> .config
+              echo "CONFIG_PACKAGE_trusted-firmware-a-rk3588=y" >> .config
+              ;;
+            h89k.config)
+              echo "CONFIG_PACKAGE_u-boot-hinlink-h89k-rk3588=y" >> .config
+              echo "CONFIG_PACKAGE_trusted-firmware-a-rk3588=y" >> .config
+              ;;
+          esac
+
+          # ★ 官方强调：改完 uboot-rockchip/Makefile 后必须清 packageinfo 再 defconfig
+          rm -f tmp/.packageinfo tmp/.targetinfo tmp/.config-package.in tmp/.packagedeps tmp/.config-target.in
+
+          make defconfig
+
+          echo ">>> 最终启用的 u-boot / ATF 包："
+          grep -E 'CONFIG_PACKAGE_u-boot-hinlink|CONFIG_PACKAGE_trusted-firmware-a' .config || true
+
+          # 强制检查：必须真正启用了 u-boot 包
+          if ! grep -q 'CONFIG_PACKAGE_u-boot-hinlink.*=y' .config; then
+            echo "错误：U-Boot 包没有被正确启用！请检查 0001 补丁和设备定义。"
+            exit 1
+          fi
+
+      # ========== 仅输出配置模式 ==========
+      - name: 仅输出完整配置
+        if: env.BUILD_CONFIG_ONLY == 'true'
+        working-directory: ./openwrt
+        run: |
+          echo "========================================"
+          echo "仅输出完整配置模式"
+          echo "========================================"
+          echo "当前配置: ${{ matrix.config }}"
+          echo
+          echo "========== 完整 .config =========="
+          cat .config
+          echo "========== 完整 .config 结束 =========="
+          mkdir -p config-output
+          cp .config "config-output/${{ matrix.config }}_${{ env.date1 }}_full.config"
+          ls -lh config-output/
+
+      - name: 上传完整配置
+        if: env.BUILD_CONFIG_ONLY == 'true'
+        uses: actions/upload-artifact@main
+        with:
+          name: config_${{ env.OPENWRT_NAME }}_${{ matrix.config }}_${{ env.date1 }}
+          path: openwrt/config-output/*.config
+
+      # ========== 下载 + 编译 ==========
+      - name: 下载安装包
+        if: env.BUILD_CONFIG_ONLY != 'true'
+        working-directory: ./openwrt
+        run: |
+          make download -j"$(nproc)"
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
+
+      - name: 编译固件
+        id: compile
+        if: env.BUILD_CONFIG_ONLY != 'true'
+        working-directory: ./openwrt
+        run: |
+          echo -e "$(nproc) thread compile"
+          make -j"$(nproc)" || make -j1 || make -j1 V=s
+
+      - name: 获取固件设备名字
+        if: env.BUILD_CONFIG_ONLY != 'true'
+        working-directory: ./openwrt
+        run: |
+          DEVICE_NAME=$(grep '^CONFIG_TARGET_.*_DEVICE_.*=y' .config | sed -r 's/^CONFIG_TARGET_(.*)_DEVICE_(.*)=y/\1_\2/' | head -n 1)
+          if [ -n "$DEVICE_NAME" ]; then
+            echo "DEVICE_NAME=$DEVICE_NAME" >> "$GITHUB_ENV"
+          else
+            echo "DEVICE_NAME=${{ matrix.config }}" >> "$GITHUB_ENV"
+          fi
+
+      - name: 上传bin目录文件
+        if: steps.compile.outcome == 'success' && env.UPLOAD_BIN == 'true'
+        uses: actions/upload-artifact@main
+        with:
+          name: bin_${{ env.OPENWRT_NAME }}_${{ env.DEVICE_NAME }}_${{ env.date1 }}
+          path: openwrt/bin
+
+      - name: 整理文件到firmware目录
+        id: organize
+        if: steps.compile.outcome == 'success'
+        run: |
+          mkdir -p firmware
+          cp -v ./openwrt/.config "./firmware/${{ env.date1 }}_${{ env.OPENWRT_NAME }}_${{ env.DEVICE_NAME }}.config"
+
+          find openwrt/bin/targets/*/*/ -maxdepth 1 -type f \
+            \( -name "config.buildinfo" -o \
+               -name "*.bin" -o \
+               -name "*.img" -o \
+               -name "*.img.gz" -o \
+               -name "*.itb" -o \
+               -name "*.ubi" -o \
+               -name "*.trx" -o \
+               -name "*.tar" \
+            \) \
+            -exec cp -v {} ./firmware/ \;
+
+          cd firmware
+
+          if [ -f config.buildinfo ]; then
+            mv config.buildinfo \
+              "${{ env.date1 }}_${{ env.OPENWRT_NAME }}_${{ env.DEVICE_NAME }}_config.buildinfo"
+          fi
+
+          for file in *.bin *.img *.img.gz *.itb *.ubi *.trx *.tar; do
+            [ -f "$file" ] || continue
+            mv "$file" \
+              "${{ env.date1 }}_${{ env.OPENWRT_NAME }}_${{ env.DEVICE_NAME }}_$file"
+          done
+
+          echo "FIRMWARE=$GITHUB_WORKSPACE/firmware" >> "$GITHUB_ENV"
+
+      - name: 上传firmware目录文件
+        if: steps.organize.outcome == 'success' && env.UPLOAD_FIRMWARE == 'true'
+        uses: actions/upload-artifact@main
+        with:
+          name: firmware_${{ env.OPENWRT_NAME }}_${{ env.DEVICE_NAME }}_${{ env.date1 }}
+          path: ${{ env.FIRMWARE }}
+
+      - name: 生成release描述
+        id: release
+        if: steps.organize.outcome == 'success' && env.UPLOAD_RELEASE == 'true'
+        run: |
+          touch release.txt
+          echo "由衷感谢所有为 openwrt 无私奉献的大佬们" >> release.txt
+          echo "主源码: immortalwrt/immortalwrt (${{ env.REPO_BRANCH }})" >> release.txt
+          echo "适配来源: Beaverfffan/immortalwrt-hinlink" >> release.txt
+          echo "当前配置: ${{ matrix.config }}" >> release.txt
+          echo "📥 固件下载" >> release.txt
+
+      - name: 发布至release
+        if: steps.release.outcome == 'success'
+        uses: softprops/action-gh-release@master
+        with:
+          files: ${{ env.FIRMWARE }}/*
+          name: ${{ env.date3 }}-${{ matrix.config }}
+          tag_name: ${{ env.date2 }}-${{ matrix.config }}
+          body_path: release.txt
+
+      # ========== 回写完整配置到本仓库 ==========
+      - name: config文件上传自动更新1
+        run: |
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+      - name: config文件上传自动更新2
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          git clone -b main "https://github.com/${REPO}.git" main
+
+      - name: config文件上传自动更新3
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/main/configs"
+          if [ -f "$GITHUB_WORKSPACE/openwrt/.config" ]; then
+            cp "$GITHUB_WORKSPACE/openwrt/.config" \
+              "${GITHUB_WORKSPACE}/main/configs/${{ matrix.config }}.full.config"
+
+            cd "$GITHUB_WORKSPACE/main"
+            git add "configs/${{ matrix.config }}.full.config"
+
+            if git diff --cached --quiet; then
+              echo "nothing to commit"
+            else
+              git commit -m "add full config for ${{ matrix.config }} $(date '+%Y-%m-%d %H:%M:%S')"
+
+              for i in 1 2 3 4 5; do
+                git pull --rebase origin main || true
+                if git push --quiet "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${REPO}.git" HEAD:main; then
+                  echo "push success"
+                  break
+                fi
+                echo "push failed, retry $i ..."
+                sleep 10
+              done
+            fi
+          fi
+
+      - name: 查看磁盘使用情况
+        if: (!cancelled())
+        run: df -hT
+
+      - name: 删除工作流
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          delete_workflow_pattern: ${{ github.workflow }}
+          retain_days: 7
+          keep_minimum_runs: 0

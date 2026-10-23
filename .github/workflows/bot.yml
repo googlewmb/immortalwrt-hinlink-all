@@ -1,0 +1,308 @@
+name: Batch-Update-HINLINK-Configs
+
+on:
+  workflow_dispatch:
+    inputs:
+      DRY_RUN:
+        description: "仅预览修改，不写入或推送（true=预览，false=实际修改）"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  update-configs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update and preview configs
+        env:
+          DRY_RUN: ${{ inputs.DRY_RUN }}
+        run: |
+          python3 <<'PY'
+          import os
+          import re
+          import sys
+          import difflib
+          from pathlib import Path
+
+          # 正确路径：仓库根目录下的 configs/
+          ROOT = Path("configs")
+          EXPECTED_CONFIG_COUNT = 16
+          DRY_RUN = os.environ.get("DRY_RUN", "true").lower() == "true"
+
+          # 所有修改规则统一定义在这里
+          ENABLE_PACKAGES = [
+              "luci-app-openclash",
+              "luci-app-autoreboot",
+              "luci-app-mini-diskmanager",
+              "luci-app-natmapt",
+              "luci-app-partexp",
+              "luci-app-samba4",
+              "luci-app-upnp",
+              "luci-app-wolultra",
+              "autosamba",
+              "luci-app-cpufreq",
+              "luci-app-passwall",
+              "luci-app-ttyd",
+              "luci-app-lucky",
+              "luci-app-smartdns",
+              "kmod-xdp-sockets-diag",
+              "kmod-sched-bpf",
+              "kmod-tcp-bbr",
+              "dae",
+              "daed",
+              "daed-geoip",
+              "daed-geosite",
+              "luci-app-daede",
+          ]
+
+          # 非软件包配置项及插件子选项
+          ENABLE_OPTIONS = {
+              "CONFIG_LUCI_LANG_zh_Hans": "y",
+              "CONFIG_TARGET_ROOTFS_PARTSIZE": "512",
+              "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadow_TLS": "y",
+              "CONFIG_DEVEL": "y",
+              "CONFIG_KERNEL_DEBUG_INFO_REDUCED": "n",
+              "CONFIG_KERNEL_DEBUG_INFO": "y",
+              "CONFIG_KERNEL_DEBUG_INFO_BTF": "y",
+              "CONFIG_KERNEL_CGROUPS": "y",
+              "CONFIG_KERNEL_CGROUP_BPF": "y",
+              "CONFIG_KERNEL_BPF_EVENTS": "y",
+              "CONFIG_KERNEL_XDP_SOCKETS": "y",
+              "CONFIG_BPF_TOOLCHAIN_NONE": "n",
+              "CONFIG_BPF_TOOLCHAIN_HOST": "y",
+              "CONFIG_BPF_TOOLCHAIN_BUILD_LLVM": "n",
+          }
+
+          if not ROOT.is_dir():
+              sys.exit("错误：找不到 configs/ 目录。")
+
+          # 只选择普通 .config，排除所有 .config.full.config
+          files = sorted(
+              p for p in ROOT.rglob("*.config")
+              if p.is_file()
+              and not p.name.endswith(".config.full.config")
+          )
+
+          print(f"配置目录：{ROOT}")
+          print(f"发现普通配置文件：{len(files)} 个")
+          print(f"运行模式：{'仅预览' if DRY_RUN else '实际修改'}")
+
+          if len(files) != EXPECTED_CONFIG_COUNT:
+              sys.exit(
+                  f"安全检查失败：预期 {EXPECTED_CONFIG_COUNT} 个普通 .config，"
+                  f"实际发现 {len(files)} 个。为防止误修改，已停止运行。"
+              )
+
+          if not files:
+              sys.exit("错误：没有找到可处理的配置文件。")
+
+          def option_pattern(key):
+              return re.compile(
+                  r"^\s*(?:#\s*)?"
+                  + re.escape(key)
+                  + r"(?:=.*|\s+is not set)?\s*$"
+              )
+
+          def update_options(original, desired):
+              lines = original.splitlines()
+              output = []
+              seen = set()
+
+              for line in lines:
+                  matched_key = None
+
+                  for key in desired:
+                      if option_pattern(key).fullmatch(line):
+                          matched_key = key
+                          break
+
+                  if matched_key is None:
+                      output.append(line)
+                      continue
+
+                  # 同一配置项只保留一行
+                  if matched_key in seen:
+                      continue
+
+                  output.append(f"{matched_key}={desired[matched_key]}")
+                  seen.add(matched_key)
+
+              # 缺失的配置项追加到文件末尾
+              for key, value in desired.items():
+                  if key not in seen:
+                      output.append(f"{key}={value}")
+
+              return "\n".join(output).rstrip("\n") + "\n"
+
+          desired = {
+              **{
+                  f"CONFIG_PACKAGE_{name}": "y"
+                  for name in ENABLE_PACKAGES
+              },
+              **ENABLE_OPTIONS,
+          }
+
+          changed_files = []
+
+          for path in files:
+              original = path.read_text(encoding="utf-8")
+              updated = update_options(original, desired)
+
+              if updated == original:
+                  continue
+
+              changed_files.append(path)
+
+              print(f"\n{'=' * 72}")
+              print(f"文件：{path}")
+              print("-" * 72)
+
+              diff = difflib.unified_diff(
+                  original.splitlines(keepends=True),
+                  updated.splitlines(keepends=True),
+                  fromfile=f"a/{path}",
+                  tofile=f"b/{path}",
+              )
+              sys.stdout.writelines(diff)
+
+              if not DRY_RUN:
+                  path.write_text(updated, encoding="utf-8")
+
+          print("\n" + "=" * 72)
+          print(f"目标配置项：{len(desired)} 个")
+          print(f"需要修改的文件：{len(changed_files)} 个")
+          print(f"未变化的文件：{len(files) - len(changed_files)} 个")
+
+          if DRY_RUN:
+              print("\n预览完成：没有写入配置文件，也不会提交推送。")
+          else:
+              print("\n配置修改完成，准备进行安全校验和提交。")
+
+          manifest = (
+              Path(os.environ.get("RUNNER_TEMP", "/tmp"))
+              / "changed-configs.txt"
+          )
+          manifest.write_text(
+              "".join(f"{p}\n" for p in changed_files),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Verify modified files
+        if: ${{ !inputs.DRY_RUN }}
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          python3 <<'PY'
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          manifest = Path(os.environ["RUNNER_TEMP"]) / "changed-configs.txt"
+          allowed = {
+              line.strip()
+              for line in manifest.read_text(encoding="utf-8").splitlines()
+              if line.strip()
+          }
+
+          result = subprocess.run(
+              ["git", "diff", "--name-only"],
+              capture_output=True,
+              text=True,
+              check=True,
+          )
+
+          changed = set(result.stdout.splitlines())
+
+          if changed != allowed:
+              print("安全检查失败：Git 变更清单与脚本修改清单不一致。")
+              print("Git 变更：", sorted(changed))
+              print("预期变更：", sorted(allowed))
+              sys.exit(1)
+
+          for filename in changed:
+              path = Path(filename)
+
+              if (
+                  not filename.startswith("configs/")
+                  or not path.name.endswith(".config")
+                  or path.name.endswith(".config.full.config")
+              ):
+                  sys.exit(f"安全检查失败：禁止修改此文件：{filename}")
+
+          print(f"安全检查通过：仅涉及 {len(changed)} 个 configs/ 下的普通 .config 文件。")
+          PY
+
+      - name: Commit and push
+        if: ${{ !inputs.DRY_RUN }}
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          python3 <<'PY'
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          manifest = Path(os.environ["RUNNER_TEMP"]) / "changed-configs.txt"
+          files = [
+              line.strip()
+              for line in manifest.read_text(encoding="utf-8").splitlines()
+              if line.strip()
+          ]
+
+          if not files:
+              print("配置没有变化，无需提交。")
+              sys.exit(0)
+
+          for filename in files:
+              subprocess.run(["git", "add", "--", filename], check=True)
+
+          staged = subprocess.run(
+              ["git", "diff", "--cached", "--name-only"],
+              capture_output=True,
+              text=True,
+              check=True,
+          ).stdout.splitlines()
+
+          if set(staged) != set(files):
+              sys.exit("安全检查失败：暂存文件与目标文件不一致，停止提交。")
+
+          subprocess.run(
+              ["git", "config", "user.name", "github-actions[bot]"],
+              check=True,
+          )
+          subprocess.run(
+              [
+                  "git", "config", "user.email",
+                  "41898282+github-actions[bot]@users.noreply.github.com"
+              ],
+              check=True,
+          )
+
+          subprocess.run(
+              ["git", "commit", "-m", "chore: update HINLINK config packages"],
+              check=True,
+          )
+
+          branch = os.environ.get("GITHUB_REF_NAME")
+          if not branch:
+              sys.exit("错误：无法确定当前分支。")
+
+          subprocess.run(
+              ["git", "push", "origin", branch],
+              check=True,
+          )
+
+          print("配置已提交并推送。")
+          PY
