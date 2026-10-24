@@ -60,12 +60,7 @@ jobs:
   build:
     strategy:
       matrix:
-        config: ${{ fromJSON(
-          github.event_name == 'workflow_dispatch' &&
-          github.event.inputs.device != 'all' &&
-          format('["{0}"]', github.event.inputs.device) ||
-          '["h28k.config","h29k-v1.3-1.14.config","h29k-v5-1.14.config","h29k-v5-1.49.config","h66k.config","h68k-a-b-usb.config","h68k-a-b.config","h68k-c-d-f-usb.config","h68k-c-d-f.config","h68k-new.config","h69k-mini.config","h69k.config","h88k-v2.config","h88k-v3.config","h89k.config","ht2.config"]'
-        ) }}
+        config: ${{ fromJSON(github.event_name == 'workflow_dispatch' && github.event.inputs.device != 'all' && format('["{0}"]', github.event.inputs.device) || '["h28k.config","h29k-v1.3-1.14.config","h29k-v5-1.14.config","h29k-v5-1.49.config","h66k.config","h68k-a-b-usb.config","h68k-a-b.config","h68k-c-d-f-usb.config","h68k-c-d-f.config","h68k-new.config","h69k-mini.config","h69k.config","h88k-v2.config","h88k-v3.config","h89k.config","ht2.config"]') }}
       fail-fast: false
 
     env:
