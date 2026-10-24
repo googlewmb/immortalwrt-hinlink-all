@@ -20,14 +20,17 @@ git clone -b master --depth 1 \
 https://github.com/immortalwrt/homeproxy.git \
 homeproxy
 
-# SmartDNS
-#git clone -b master --depth 1 \
-#https://github.com/pymumu/luci-app-smartdns.git \
-#luci-app-smartdns
+# SmartDNS 核心（官方 OpenWrt 软件包）
+# 上游核心源码：https://github.com/pymumu/smartdns
+# OpenWrt 软件包：https://github.com/pymumu/openwrt-smartdns
+git clone -b master --depth 1 \
+https://github.com/pymumu/openwrt-smartdns.git \
+smartdns
 
-#git clone -b master --depth 1 \
-#https://github.com/pymumu/smartdns.git \
-#smartdns
+# SmartDNS LuCI 管理界面
+git clone -b master --depth 1 \
+https://github.com/pymumu/luci-app-smartdns.git \
+luci-app-smartdns
 
 # MosDNS
 #git clone -b v5 --depth 1 \
