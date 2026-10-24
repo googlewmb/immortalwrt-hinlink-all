@@ -10,6 +10,31 @@ on:
         required: true
         default: false
         type: boolean
+
+      device:
+        description: '选择要编译的机型'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - h28k.config
+          - h29k-v1.3-1.14.config
+          - h29k-v5-1.14.config
+          - h29k-v5-1.49.config
+          - h66k.config
+          - h68k-a-b-usb.config
+          - h68k-a-b.config
+          - h68k-c-d-f-usb.config
+          - h68k-c-d-f.config
+          - h68k-new.config
+          - h69k-mini.config
+          - h69k.config
+          - h88k-v2.config
+          - h88k-v3.config
+          - h89k.config
+          - ht2.config
+
       source_ref:
         description: '官方 ImmortalWrt 分支或 commit（默认 master）'
         required: false
@@ -35,23 +60,12 @@ jobs:
   build:
     strategy:
       matrix:
-        config:
-          - h28k.config
-          - h29k-v1.3-1.14.config
-          - h29k-v5-1.14.config
-          - h29k-v5-1.49.config
-          - h66k.config
-          - h68k-a-b-usb.config
-          - h68k-a-b.config
-          - h68k-c-d-f-usb.config
-          - h68k-c-d-f.config
-          - h68k-new.config
-          - h69k-mini.config
-          - h69k.config
-          - h88k-v2.config
-          - h88k-v3.config
-          - h89k.config
-          - ht2.config
+        config: ${{ fromJSON(
+          github.event_name == 'workflow_dispatch' &&
+          github.event.inputs.device != 'all' &&
+          format('["{0}"]', github.event.inputs.device) ||
+          '["h28k.config","h29k-v1.3-1.14.config","h29k-v5-1.14.config","h29k-v5-1.49.config","h66k.config","h68k-a-b-usb.config","h68k-a-b.config","h68k-c-d-f-usb.config","h68k-c-d-f.config","h68k-new.config","h69k-mini.config","h69k.config","h88k-v2.config","h88k-v3.config","h89k.config","ht2.config"]'
+        ) }}
       fail-fast: false
 
     env:
@@ -148,7 +162,6 @@ jobs:
             echo "  - 应用 0001-register-hinlink-devices.patch"
             for p in patches-uboot/0001-*.patch; do
               echo "    patch: $p"
-              # 正确：-d openwrt（根目录），不是 uboot-rockchip 子目录
               patch -p1 -d openwrt < "$p" || {
                 echo "错误：0001 补丁应用失败"
                 exit 1
@@ -219,8 +232,7 @@ jobs:
           cd openwrt
           "${GITHUB_WORKSPACE}/${DIY_P2_SH}"
 
-          # ★ 关键：强制打开正确的 U-Boot 包名（是 u-boot- 不是 uboot-rockchip-）
-          # 同时打开对应 SoC 的 trusted-firmware-a（否则会缺 ATF/TPL 二进制）
+          # 强制打开正确的 U-Boot 包名
           CFG="${{ matrix.config }}"
           case "$CFG" in
             h28k.config)
@@ -257,7 +269,7 @@ jobs:
               ;;
           esac
 
-          # ★ 官方强调：改完 uboot-rockchip/Makefile 后必须清 packageinfo 再 defconfig
+          # 改完 uboot-rockchip/Makefile 后清理 packageinfo 再 defconfig
           rm -f tmp/.packageinfo tmp/.targetinfo tmp/.config-package.in tmp/.packagedeps tmp/.config-target.in
 
           make defconfig
@@ -265,7 +277,6 @@ jobs:
           echo ">>> 最终启用的 u-boot / ATF 包："
           grep -E 'CONFIG_PACKAGE_u-boot-hinlink|CONFIG_PACKAGE_trusted-firmware-a' .config || true
 
-          # 强制检查：必须真正启用了 u-boot 包
           if ! grep -q 'CONFIG_PACKAGE_u-boot-hinlink.*=y' .config; then
             echo "错误：U-Boot 包没有被正确启用！请检查 0001 补丁和设备定义。"
             exit 1
