@@ -174,6 +174,15 @@ echo 'src-git kenzo https://github.com/kenzok8/openwrt-packages.git' >> feeds.co
 echo 'src-git small https://github.com/kenzok8/small.git' >> feeds.conf.default
 # echo 'src-git small_package https://github.com/kenzok8/small-package.git' >> feeds.conf.default
 
+
+# rtp2httpd - IPTV 流媒体转发服务
+# 包含主程序、LuCI 管理界面及相关 OpenWrt 软件包
+# 官方仓库：https://github.com/stackia/rtp2httpd
+echo 'src-git rtp2httpd https://github.com/stackia/rtp2httpd.git;main' >> feeds.conf.default
+
+
+
+
 # Kiddin9
 #echo 'src-git kiddin9 https://github.com/kiddin9/op-packages.git' >> feeds.conf.default
 
