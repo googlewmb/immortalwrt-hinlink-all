@@ -1,3 +1,4 @@
+
 #!/bin/bash
 #
 # DIY2 - H68K + iStoreOS 24.10
@@ -12,13 +13,11 @@
 
 set -e
 
-echo "========================================"
 echo "DIY2 - H68K + iStoreOS 24.10"
-echo "第三方插件 / 依赖 / 来源优先级处理"
-echo "========================================"
+echo "第三方插件 / 依赖 / 来源优先"
 
 ###############################################################################
-# 0. 基础目录与环境检查
+# 0. 基础目录
 ###############################################################################
 
 TOPDIR="${TOPDIR:-$(pwd)}"
@@ -29,36 +28,19 @@ TOPDIR="${TOPDIR:-$(pwd)}"
 }
 
 cd "$TOPDIR"
-TOPDIR="$(pwd)"
 
 echo "TOPDIR: $TOPDIR"
 
-# scripts/feeds 是可执行文件，不是目录
-[ -f scripts/feeds ] && [ -x scripts/feeds ] || {
-    echo "ERROR: 未找到可执行的 scripts/feeds"
-    echo "请检查当前目录是否为 OpenWrt / ImmortalWrt 源码根目录"
-    exit 1
-}
-
-for dir in package target include toolchain; do
-    [ -d "$dir" ] || {
-        echo "ERROR: 缺少源码目录: $dir"
-        exit 1
-    }
-done
-
 ###############################################################################
-# 1. 核心依赖与第三方源码预处理
+# 1. 核心依赖与第三方源码拉取 (优先于扫描逻辑)
 ###############################################################################
 
 echo
 echo "========================================"
-echo "预处理核心依赖与 PassWall 组件"
+echo "拉取/更新 核心依赖与 PassWall 组件"
 echo "========================================"
 
 # 1.1 替换 Golang 为 27.x
-# 保留原配置，默认不执行。
-#
 # if [ -d feeds/packages/lang/golang ]; then
 #     echo "删除旧 Golang"
 #     rm -rf feeds/packages/lang/golang
@@ -71,34 +53,35 @@ echo "========================================"
 #     feeds/packages/lang/golang
 
 # 1.2 移除官方旧库
-# PassWall 已由 DIY1 拉取到 package/myapp。
-# 这里保留原来的官方旧库移除逻辑。
-
-rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,v2ray-plugin,xray-plugin,geoview,shadow-tls}
-
+# PassWall 已由 DIY1 拉取到 package/myapp，这里不重复拉取
+rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,v2ray-plugin,xray-plugin,geoview,shadow-tls,dae,daed}
 rm -rf feeds/luci/applications/luci-app-passwall
 
 # DIY1 已下载：
 # package/myapp/passwall-packages
 # package/myapp/passwall
 #
-# DIY2 不重复 Clone。
+# DIY2 不重复 Clone，以下仅保留原逻辑为注释
+# rm -rf package/passwall-packages package/passwall-luci
+# git clone --depth 1 https://github.com/Openwrt-Passwall/openwrt-passwall-packages package/passwall-packages
+# git clone --depth 1 https://github.com/Openwrt-Passwall/openwrt-passwall package/passwall-luci
 
-# 1.3 注册新拉取的软件包索引
-echo "更新并安装软件包入口..."
-
+# 1.3 关键：刷新并注册新拉取的包索引到编译环境
+echo "更新并安装新依赖索引..."
 ./scripts/feeds install -p packages golang || true
 ./scripts/feeds install -f microsocks || true
 ./scripts/feeds install -a
 
 ###############################################################################
-# 2. Feed 定义
+# 2. 第三方依赖预处理 (明确要求的移除项)
 ###############################################################################
 
 echo
 echo "========================================"
-echo "初始化 Feed 优先级"
+echo "第三方依赖预处理"
 echo "========================================"
+
+REMOVE_OFFICIAL_DEPS=""
 
 OFFICIAL_FEEDS="
 packages
@@ -117,26 +100,6 @@ kenzo
 small
 "
 
-ALL_FEEDS="
-nas
-nas_luci
-jjm2473_apps
-kenzo
-small
-packages
-luci
-routing
-telephony
-store
-third
-"
-
-REMOVE_OFFICIAL_DEPS=""
-
-###############################################################################
-# 3. 软件包入口操作函数
-###############################################################################
-
 package_entry_exists()
 {
     local feed="$1"
@@ -153,8 +116,8 @@ remove_package_entry()
     local entry="package/feeds/${feed}/${pkg}"
 
     if [ -e "$entry" ] || [ -L "$entry" ]; then
-        echo "删除低优先级安装入口: ${feed}/${pkg}"
-        rm -rf "$entry"
+        echo "删除安装入口: ${feed}/${pkg}"
+        rm -f "$entry"
     fi
 }
 
@@ -174,33 +137,21 @@ is_enabled()
     local pkg="$1"
 
     grep -Eq \
-        "^CONFIG_PACKAGE_${pkg}=(y|m)$" \
+        "^CONFIG_PACKAGE_${pkg}=(y|m)" \
         .config 2>/dev/null
 }
 
-###############################################################################
-# 4. 明确要求移除的官方依赖入口
-###############################################################################
-
-echo
-echo "========================================"
-echo "官方依赖入口预处理"
-echo "========================================"
-
 for pkg in $REMOVE_OFFICIAL_DEPS; do
-
     [ -n "$pkg" ] || continue
-
     echo "明确要求：移除官方依赖入口 -> $pkg"
 
     for official_feed in $OFFICIAL_FEEDS; do
         remove_package_entry "$official_feed" "$pkg"
     done
-
 done
 
 ###############################################################################
-# 5. 获取包版本函数
+# 3. 获取包版本函数定义
 ###############################################################################
 
 get_package_version()
@@ -221,14 +172,12 @@ get_package_version()
     )"
 
     if [ -z "$version" ]; then
-
         version="$(
             sed -nE \
                 's/^[[:space:]]*PKG_RELEASE[[:space:]]*:?=[[:space:]]*(.*)$/release-\1/p' \
                 "$makefile" |
             head -n 1
         )"
-
     fi
 
     [ -n "$version" ] || version="unknown"
@@ -237,7 +186,7 @@ get_package_version()
 }
 
 ###############################################################################
-# 6. 扫描 package/myapp 真正的 Package
+# 5. 扫描 package/myapp 真正的 Package
 ###############################################################################
 
 echo
@@ -262,7 +211,7 @@ if [ -d package/myapp ]; then
         MYAPP_PACKAGES="${MYAPP_PACKAGES}
 $pkg"
 
-        echo "✓ 独立第三方包: $pkg"
+        echo "✓ $pkg"
 
     done < <(
         find package/myapp \
@@ -280,11 +229,52 @@ else
 
 fi
 
+###############################################################################
+# 5.1 强制识别 VIKINGYFY UPnP
+#
+# luci-app-upnp 使用 luci.mk
+# miniupnpd 存在多个 Package 变体
+# 因此不能只依赖 define Package 扫描
+###############################################################################
+
 echo
-echo "独立第三方包数量：$(printf '%s\n' "$MYAPP_PACKAGES" | sed '/^$/d' | wc -l)"
+echo "========================================"
+echo "检查并识别 VIKINGYFY UPnP"
+echo "========================================"
+
+VIKINGYFY_UPNP_PACKAGES="
+luci-app-upnp
+miniupnpd
+"
+
+for pkg in $VIKINGYFY_UPNP_PACKAGES; do
+
+    MYAPP_MAKEFILE="package/myapp/${pkg}/Makefile"
+
+    if [ ! -f "$MYAPP_MAKEFILE" ]; then
+        echo "ERROR: DIY1 未下载 UPnP 源码: $MYAPP_MAKEFILE"
+        exit 1
+    fi
+
+    case "
+$MYAPP_PACKAGES
+" in
+        *"
+$pkg
+"*)
+            echo "已识别: $pkg"
+            ;;
+        *)
+            MYAPP_PACKAGES="${MYAPP_PACKAGES}
+$pkg"
+            echo "补充识别: $pkg"
+            ;;
+    esac
+
+done
 
 ###############################################################################
-# 7. 收集当前 .config 中实际启用的 Package
+# 6. 收集当前 .config 中实际启用的 Package
 ###############################################################################
 
 echo
@@ -303,21 +293,17 @@ if [ -f .config ]; then
         sort -u
     )"
 
-else
-
-    echo "WARNING: .config 不存在，跳过已启用包扫描"
-
 fi
 
-echo "当前启用的 Package 数量：$(printf '%s\n' "$CONFIG_PACKAGES" | sed '/^$/d' | wc -l)"
+echo "当前启用的第三方/官方 Package 数量：$(printf '%s\n' "$CONFIG_PACKAGES" | sed '/^$/d' | wc -l)"
 
 ###############################################################################
-# 8. package/myapp 独立源码最高优先级
+# 7. 独立第三方插件优先
 ###############################################################################
 
 echo
 echo "========================================"
-echo "第一优先级：package/myapp"
+echo "独立第三方插件优先"
 echo "========================================"
 
 for pkg in $MYAPP_PACKAGES; do
@@ -349,19 +335,25 @@ for pkg in $MYAPP_PACKAGES; do
             -print0 2>/dev/null || true
     )
 
-    if [ -n "$MYAPP_MAKEFILE" ]; then
+    # 兼容 luci.mk 和多变体包：
+    # 如果没有找到 define Package/${pkg}，
+    # 则按 package/myapp/${pkg}/Makefile 定位源码
+    if [ -z "$MYAPP_MAKEFILE" ] &&
+       [ -f "package/myapp/${pkg}/Makefile" ]; then
 
-        MYAPP_VERSION="$(get_package_version "$MYAPP_MAKEFILE")"
-
-        echo "package/myapp 版本: $MYAPP_VERSION"
-
-    else
-
-        MYAPP_VERSION="unknown"
+        MYAPP_MAKEFILE="package/myapp/${pkg}/Makefile"
 
     fi
 
-    for feed in $ALL_FEEDS; do
+    if [ -n "$MYAPP_MAKEFILE" ]; then
+        MYAPP_VERSION="$(get_package_version "$MYAPP_MAKEFILE")"
+        echo "package/myapp 版本: $MYAPP_VERSION"
+    else
+        MYAPP_VERSION="unknown"
+        echo "WARNING: 未找到 package/myapp 对应 Makefile: $pkg"
+    fi
+
+    for feed in $THIRD_PARTY_FEEDS $OFFICIAL_FEEDS; do
 
         if package_entry_exists "$feed" "$pkg"; then
 
@@ -369,7 +361,7 @@ for pkg in $MYAPP_PACKAGES; do
             VERSION="$(get_package_version "$MAKEFILE")"
 
             echo "发现重复来源:"
-            echo "  来源: ${feed}/${pkg}"
+            echo "  $feed/$pkg"
             echo "  版本: $VERSION"
             echo "选择: package/myapp"
             echo "原因: 独立第三方源码优先"
@@ -383,94 +375,67 @@ for pkg in $MYAPP_PACKAGES; do
 done
 
 ###############################################################################
-# 9. 第三方集合源 > 官方 Feed
+# 8. 第三方集合源优先 (THIRD_PARTY_FEEDS > OFFICIAL_FEEDS)
 ###############################################################################
 
 echo
 echo "========================================"
-echo "第二优先级：第三方集合源"
-echo "第三优先级：官方 Feed"
+echo "第三方集合源优先"
 echo "========================================"
-
-THIRD_SELECTED=0
-OFFICIAL_SELECTED=0
-DUPLICATE_REMOVED=0
 
 for pkg in $CONFIG_PACKAGES; do
 
     [ -n "$pkg" ] || continue
 
-    IS_MYAPP=0
-
-    for myapp_pkg in $MYAPP_PACKAGES; do
-
-        if [ "$pkg" = "$myapp_pkg" ]; then
-            IS_MYAPP=1
-            break
-        fi
-
-    done
-
-    [ "$IS_MYAPP" -eq 0 ] || continue
-
-    WINNER=""
-
-    # 按完整优先级寻找第一个可用来源。
-    for feed in $ALL_FEEDS; do
-
-        if package_entry_exists "$feed" "$pkg"; then
-
-            WINNER="$feed"
-            break
-
-        fi
-
-    done
-
-    [ -n "$WINNER" ] || continue
-
-    WINNER_MAKEFILE="$(package_makefile "$WINNER" "$pkg")"
-    WINNER_VERSION="$(get_package_version "$WINNER_MAKEFILE")"
-
-    echo
-    echo "----------------------------------------"
-    echo "软件包: $pkg"
-    echo "最终来源: $WINNER"
-    echo "版本: $WINNER_VERSION"
-    echo "----------------------------------------"
-
-    case " $THIRD_PARTY_FEEDS " in
-
-        *" $WINNER "*)
-            THIRD_SELECTED=$((THIRD_SELECTED + 1))
+    case "
+$MYAPP_PACKAGES
+" in
+        *"
+$pkg
+"*)
+            continue
             ;;
-
-        *)
-            OFFICIAL_SELECTED=$((OFFICIAL_SELECTED + 1))
-            ;;
-
     esac
 
-    # 删除所有低优先级重复入口。
-    LOWER_PRIORITY=0
+    THIRD_SOURCE=""
 
-    for feed in $ALL_FEEDS; do
+    for third_feed in $THIRD_PARTY_FEEDS; do
 
-        if [ "$feed" = "$WINNER" ]; then
-
-            LOWER_PRIORITY=1
-            continue
-
+        if package_entry_exists "$third_feed" "$pkg"; then
+            THIRD_SOURCE="$third_feed"
+            break
         fi
 
-        if [ "$LOWER_PRIORITY" -eq 1 ] &&
-           package_entry_exists "$feed" "$pkg"; then
+    done
 
-            echo "移除低优先级重复来源: ${feed}/${pkg}"
+    [ -n "$THIRD_SOURCE" ] || continue
 
-            remove_package_entry "$feed" "$pkg"
+    THIRD_MAKEFILE="$(package_makefile "$THIRD_SOURCE" "$pkg")"
+    THIRD_VERSION="$(get_package_version "$THIRD_MAKEFILE")"
 
-            DUPLICATE_REMOVED=$((DUPLICATE_REMOVED + 1))
+    echo
+    echo "发现第三方重复包: $pkg"
+    echo "第三方来源: ${THIRD_SOURCE}/${pkg}"
+    echo "第三方版本: $THIRD_VERSION"
+
+    for official_feed in $OFFICIAL_FEEDS; do
+
+        if package_entry_exists "$official_feed" "$pkg"; then
+
+            OFFICIAL_MAKEFILE="$(package_makefile "$official_feed" "$pkg")"
+            OFFICIAL_VERSION="$(get_package_version "$OFFICIAL_MAKEFILE")"
+
+            echo "官方来源: ${official_feed}/${pkg}"
+            echo "官方版本: $OFFICIAL_VERSION"
+
+            if [ "$THIRD_VERSION" = "$OFFICIAL_VERSION" ]; then
+                echo "版本相同 -> 选择: 第三方 ${THIRD_SOURCE}/${pkg}"
+            else
+                echo "版本不同 -> 选择: 第三方 ${THIRD_SOURCE}/${pkg}"
+                echo "原因: 第三方来源优先，不按版本号自动选择"
+            fi
+
+            remove_package_entry "$official_feed" "$pkg"
 
         fi
 
@@ -478,13 +443,8 @@ for pkg in $CONFIG_PACKAGES; do
 
 done
 
-echo
-echo "第三方来源选择数量: $THIRD_SELECTED"
-echo "官方来源选择数量: $OFFICIAL_SELECTED"
-echo "重复入口移除数量: $DUPLICATE_REMOVED"
-
 ###############################################################################
-# 10. SmartDNS Rust Makefile 修复
+# 9. SmartDNS Rust Makefile 修复
 ###############################################################################
 
 echo
@@ -492,39 +452,28 @@ echo "========================================"
 echo "修复 SmartDNS Rust Makefile"
 echo "========================================"
 
-RUST_MAKEFILE="feeds/packages/lang/rust/rust-package.mk"
+if [ -f package/myapp/smartdns/package/openwrt/Makefile ]; then
 
-if [ -f "$RUST_MAKEFILE" ]; then
+    sed -i \
+        's@include ../../lang/rust/rust-package.mk@include $(TOPDIR)/feeds/packages/lang/rust/rust-package.mk@g' \
+        package/myapp/smartdns/package/openwrt/Makefile
 
-    if [ -f package/myapp/smartdns/package/openwrt/Makefile ]; then
+    echo "已修复: package/myapp/smartdns/package/openwrt/Makefile"
 
-        sed -i \
-            's@include ../../lang/rust/rust-package.mk@include $(TOPDIR)/feeds/packages/lang/rust/rust-package.mk@g' \
-            package/myapp/smartdns/package/openwrt/Makefile
+fi
 
-        echo "已检查: package/myapp/smartdns/package/openwrt/Makefile"
+if [ -f package/myapp/smartdns/Makefile ]; then
 
-    fi
+    sed -i \
+        's@include ../../lang/rust/rust-package.mk@include $(TOPDIR)/feeds/packages/lang/rust/rust-package.mk@g' \
+        package/myapp/smartdns/Makefile
 
-    if [ -f package/myapp/smartdns/Makefile ]; then
-
-        sed -i \
-            's@include ../../lang/rust/rust-package.mk@include $(TOPDIR)/feeds/packages/lang/rust/rust-package.mk@g' \
-            package/myapp/smartdns/Makefile
-
-        echo "已检查: package/myapp/smartdns/Makefile"
-
-    fi
-
-else
-
-    echo "WARNING: 未找到 $RUST_MAKEFILE"
-    echo "SmartDNS Rust 依赖路径需要进一步检查"
+    echo "已修复: package/myapp/smartdns/Makefile"
 
 fi
 
 ###############################################################################
-# 11. 自动添加 LuCI 中文语言包
+# 10. 自动添加 LuCI 中文语言包 (移除了内部 make defconfig)
 ###############################################################################
 
 echo
@@ -534,60 +483,38 @@ echo "========================================"
 
 if [ -f .config ]; then
 
-    LUCI_APPS="$(
-        sed -nE \
-            's/^CONFIG_PACKAGE_(luci-app-[A-Za-z0-9_.+-]+)=(y|m)$/\1/p' \
-            .config |
+    for pkg in $(
+        grep '^CONFIG_PACKAGE_luci-app-.*=y' .config |
+        sed 's/^CONFIG_PACKAGE_//;s/=y//' |
         sort -u
-    )"
+    ); do
 
-    for pkg in $LUCI_APPS; do
+        trans="luci-i18n-${pkg#luci-app-}"
 
-        [ -n "$pkg" ] || continue
-
-        trans="luci-i18n-${pkg#luci-app-}-zh-cn"
-
-        if grep -Fqx "CONFIG_PACKAGE_${trans}=y" .config; then
+        if grep -q \
+            "^CONFIG_PACKAGE_${trans}-zh-cn=y" \
+            .config 2>/dev/null; then
             continue
         fi
 
-        if grep -Fqx "CONFIG_PACKAGE_${trans}=m" .config; then
-            continue
-        fi
-
-        if grep -R -n -E \
-            "^[[:space:]]*define[[:space:]]+Package/${trans}([[:space:]]|$)" \
+        if grep -rnq \
+            "Package.*${trans}-zh-cn" \
             package feeds 2>/dev/null; then
 
-            echo "添加中文语言包: $trans"
+            echo "添加中文语言包: ${trans}-zh-cn"
 
-            TEMP_CONFIG="$(mktemp)"
-
-            awk -v key="CONFIG_PACKAGE_${trans}" '
-                index($0, key "=") != 1 &&
-                $0 != "# " key " is not set"
-            ' .config > "$TEMP_CONFIG"
-
-            printf '%s=y\n' "CONFIG_PACKAGE_${trans}" >> "$TEMP_CONFIG"
-
-            mv "$TEMP_CONFIG" .config
-
-        else
-
-            echo "未找到中文包，跳过: $trans"
+            echo \
+                "CONFIG_PACKAGE_${trans}-zh-cn=y" \
+                >> .config
 
         fi
 
     done
 
-else
-
-    echo "WARNING: .config 不存在，跳过中文语言包"
-
 fi
 
 ###############################################################################
-# 12. Conntrack 调优
+# 11. conntrack 调优
 ###############################################################################
 
 echo
@@ -595,36 +522,23 @@ echo "========================================"
 echo "设置 conntrack"
 echo "========================================"
 
-SYSCTL_FILE="package/base-files/files/etc/sysctl.conf"
-
-mkdir -p "$(dirname "$SYSCTL_FILE")"
-
-touch "$SYSCTL_FILE"
-
 sed -i \
     '/^[[:space:]]*net\.netfilter\.nf_conntrack_max[[:space:]]*=/d' \
-    "$SYSCTL_FILE"
+    package/base-files/files/etc/sysctl.conf
 
-cat >> "$SYSCTL_FILE" <<'EOF'
-
-# Conntrack maximum connections
-net.netfilter.nf_conntrack_max=655550
-EOF
+echo \
+    'net.netfilter.nf_conntrack_max=655550' \
+    >> package/base-files/files/etc/sysctl.conf
 
 echo "nf_conntrack_max = 655550"
 
 ###############################################################################
-# 13. Wi-Fi 首次启动自动开启
-#
-# 5GHz:
-#   Channel: 36
-#   Country: US
+# 12. Wi-Fi 首次启动自动开启
 ###############################################################################
 
 echo
 echo "========================================"
 echo "设置 Wi-Fi 首次启动自动开启"
-echo "5GHz: Channel 36 / Country US"
 echo "========================================"
 
 mkdir -p files/etc/uci-defaults
@@ -634,104 +548,34 @@ cat > files/etc/uci-defaults/zz-enable-wifi <<'EOF'
 
 . /lib/functions.sh
 
-# 无线配置不存在时尝试生成。
-if [ ! -s /etc/config/wireless ]; then
-    wifi config 2>/dev/null
-fi
+[ -s /etc/config/wireless ] || wifi config
 
-if [ ! -s /etc/config/wireless ]; then
-    logger -t enable-wifi "wireless config unavailable"
-    exit 0
-fi
+if [ -s /etc/config/wireless ]; then
 
-config_load wireless
+    config_load wireless
 
-###############################################################################
-# 开启所有 radio 和 wifi-iface
-###############################################################################
+    enable_wifi()
+    {
+        local cfg="$1"
+        uci -q set "wireless.${cfg}.disabled=0"
+    }
 
-enable_wifi()
-{
-    local cfg="$1"
+    config_foreach enable_wifi wifi-device
+    config_foreach enable_wifi wifi-iface
 
-    uci -q set "wireless.${cfg}.disabled=0"
-}
-
-config_foreach enable_wifi wifi-device
-config_foreach enable_wifi wifi-iface
-
-###############################################################################
-# 识别 5GHz radio
-###############################################################################
-
-RADIOS_5G=""
-
-find_5g_radio()
-{
-    local cfg="$1"
-    local band=""
-    local hwmode=""
-
-    band="$(uci -q get "wireless.${cfg}.band" 2>/dev/null)"
-    hwmode="$(uci -q get "wireless.${cfg}.hwmode" 2>/dev/null)"
-
-    case "${band}:${hwmode}" in
-
-        5g:*|*:11a|*:11an|*:11ac|*:11ax|*:11be)
-
-            RADIOS_5G="${RADIOS_5G} ${cfg}"
-
-            logger -t enable-wifi "5GHz radio detected: ${cfg}"
-
-            ;;
-
-    esac
-}
-
-config_foreach find_5g_radio wifi-device
-
-###############################################################################
-# 设置 5GHz 国家码和信道
-###############################################################################
-
-if [ -n "$RADIOS_5G" ]; then
-
-    for radio in $RADIOS_5G; do
-
-        uci -q set "wireless.${radio}.country=US"
-        uci -q set "wireless.${radio}.channel=36"
-        uci -q set "wireless.${radio}.disabled=0"
-
-        logger -t enable-wifi \
-            "Enabled ${radio}: country=US channel=36"
-
-    done
-
-else
-
-    logger -t enable-wifi \
-        "No identifiable 5GHz radio; skip 5GHz channel configuration"
+    uci -q commit wireless
 
 fi
-
-###############################################################################
-# 提交无线配置
-###############################################################################
-
-uci -q commit wireless
-
-logger -t enable-wifi "Wi-Fi default configuration completed"
 
 exit 0
 EOF
 
 chmod +x files/etc/uci-defaults/zz-enable-wifi
 
-echo "Wi-Fi 首次启动自动开启脚本已生成"
-echo "5GHz 国家码和信道设置：US / 36"
+echo "Wi-Fi 首次启动自动开启已设置"
 
 ###############################################################################
-# 14. 最终来源检查
+# 13. 最终来源检查
 ###############################################################################
 
 echo
@@ -770,15 +614,19 @@ for pkg in $MYAPP_PACKAGES; do
                 -print0 2>/dev/null || true
         )
 
+        # 兼容 luci.mk 和多变体包
+        if [ -z "$FOUND_MYAPP" ] &&
+           [ -f "package/myapp/${pkg}/Makefile" ]; then
+
+            FOUND_MYAPP="package/myapp/${pkg}/Makefile"
+
+        fi
+
         if [ -n "$FOUND_MYAPP" ]; then
 
-            echo "  来源: package/myapp"
+            echo "  package/myapp"
             echo "  Makefile: $FOUND_MYAPP"
-            echo "  版本: $(get_package_version "$FOUND_MYAPP")"
-
-        else
-
-            echo "  WARNING: 未找到对应 Package 定义"
+            echo "  version: $(get_package_version "$FOUND_MYAPP")"
 
         fi
 
@@ -787,34 +635,51 @@ for pkg in $MYAPP_PACKAGES; do
 done
 
 ###############################################################################
-# 15. 最终配置检查
+# 13.1 VIKINGYFY UPnP 最终检查
 ###############################################################################
 
 echo
 echo "========================================"
-echo "最终配置检查"
+echo "VIKINGYFY UPnP 最终检查"
 echo "========================================"
 
-echo
-echo "Conntrack:"
-grep -n 'nf_conntrack_max' \
-    package/base-files/files/etc/sysctl.conf || true
+for pkg in luci-app-upnp miniupnpd; do
 
-echo
-echo "Wi-Fi 初始化脚本:"
-ls -l files/etc/uci-defaults/zz-enable-wifi
+    echo
+    echo "检查: $pkg"
 
-echo
-echo "Feed 安装入口目录:"
-ls -ld package/feeds 2>/dev/null || true
+    MYAPP_MAKEFILE="package/myapp/${pkg}/Makefile"
 
-echo
-echo "当前 .config:"
-if [ -f .config ]; then
-    echo ".config 存在"
-else
-    echo "WARNING: .config 不存在"
-fi
+    if [ ! -f "$MYAPP_MAKEFILE" ]; then
+        echo "ERROR: myapp UPnP 源码不存在: $MYAPP_MAKEFILE"
+        exit 1
+    fi
+
+    echo "✓ myapp 源码存在: $MYAPP_MAKEFILE"
+    echo "  版本: $(get_package_version "$MYAPP_MAKEFILE")"
+
+    FOUND_FEED_ENTRY=0
+
+    for feed in $THIRD_PARTY_FEEDS $OFFICIAL_FEEDS; do
+
+        if package_entry_exists "$feed" "$pkg"; then
+
+            echo "ERROR: 发现残留同名 feeds 入口: ${feed}/${pkg}"
+            FOUND_FEED_ENTRY=1
+
+        fi
+
+    done
+
+    if [ "$FOUND_FEED_ENTRY" -ne 0 ]; then
+        echo "ERROR: UPnP 来源检查失败"
+        exit 1
+    fi
+
+    echo "✓ 未发现同名 feeds 安装入口"
+    echo "✓ $pkg 优先使用 package/myapp 源码"
+
+done
 
 ###############################################################################
 # 16. DIY2 完成
