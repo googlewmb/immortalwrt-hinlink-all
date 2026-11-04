@@ -59,6 +59,16 @@ jobs:
               "kmod-tcp-bbr",
           ]
 
+          # 以下五个软件包完全不集成
+          # 从所有配置文件中彻底删除对应配置项
+          REMOVE_PACKAGES = [
+              "dae",
+              "daed",
+              "daed-geoip",
+              "daed-geosite",
+              "luci-app-daede",
+          ]
+
           # 非软件包配置项及插件子选项
           ENABLE_OPTIONS = {
               "CONFIG_LUCI_LANG_zh_Hans": "y",
@@ -108,12 +118,22 @@ jobs:
                   + r"(?:=.*|\s+is not set)?\s*$"
               )
 
-          def update_options(original, desired):
+          def update_options(original, desired, remove_keys):
               lines = original.splitlines()
               output = []
               seen = set()
 
+              # 需要彻底删除的软件包配置项
+              remove_patterns = [
+                  option_pattern(key)
+                  for key in remove_keys
+              ]
+
               for line in lines:
+                  # 完全删除五个软件包的配置行
+                  if any(pattern.fullmatch(line) for pattern in remove_patterns):
+                      continue
+
                   matched_key = None
 
                   for key in desired:
@@ -147,11 +167,24 @@ jobs:
               **ENABLE_OPTIONS,
           }
 
+          # 需要删除的完整配置项名称
+          remove_keys = [
+              f"CONFIG_PACKAGE_{name}"
+              for name in REMOVE_PACKAGES
+          ]
+
           changed_files = []
 
           for path in files:
               original = path.read_text(encoding="utf-8")
-              updated = update_options(original, desired)
+              updated = update_options(original, desired, remove_keys)
+
+              # 二次检查：五个软件包的配置项不得残留
+              for key in remove_keys:
+                  if option_pattern(key).search(updated):
+                      sys.exit(
+                          f"安全检查失败：{path} 仍然存在禁止集成项 {key}"
+                      )
 
               if updated == original:
                   continue
@@ -175,6 +208,7 @@ jobs:
 
           print("\n" + "=" * 72)
           print(f"目标配置项：{len(desired)} 个")
+          print(f"完全不集成的软件包：{len(remove_keys)} 个")
           print(f"需要修改的文件：{len(changed_files)} 个")
           print(f"未变化的文件：{len(files) - len(changed_files)} 个")
 
