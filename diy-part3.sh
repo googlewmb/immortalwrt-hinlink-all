@@ -1,342 +1,691 @@
-name: Batch-Update-HINLINK-Configs
 
-on:
-  workflow_dispatch:
-    inputs:
-      DRY_RUN:
-        description: "仅预览修改，不写入或推送（true=预览，false=实际修改）"
-        required: true
-        default: true
-        type: boolean
+#!/bin/bash
+#
+# DIY2 - H68K + iStoreOS 24.10
+#
+# 第三方插件 / 依赖 / 来源优先级处理
+#
+# 来源优先级：
+#   1. package/myapp 独立第三方源码
+#   2. DIY1 添加的第三方集合源
+#   3. iStoreOS / OpenWrt 官方 feeds
+#
 
-permissions:
-  contents: write
+set -e
 
-jobs:
-  update-configs:
-    runs-on: ubuntu-latest
+echo "DIY2 - H68K + iStoreOS 24.10"
+echo "第三方插件 / 依赖 / 来源优先"
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+###############################################################################
+# 0. 基础目录
+###############################################################################
 
-      - name: Update and preview configs
-        env:
-          DRY_RUN: ${{ inputs.DRY_RUN }}
-        run: |
-          python3 <<'PY'
-          import os
-          import re
-          import sys
-          import difflib
-          from pathlib import Path
+TOPDIR="${TOPDIR:-$(pwd)}"
 
-          # 正确路径：仓库根目录下的 configs/
-          ROOT = Path("configs")
-          EXPECTED_CONFIG_COUNT = 16
-          DRY_RUN = os.environ.get("DRY_RUN", "true").lower() == "true"
+[ -d "$TOPDIR" ] || {
+    echo "ERROR: TOPDIR 不存在: $TOPDIR"
+    exit 1
+}
 
-          # 所有修改规则统一定义在这里
-          ENABLE_PACKAGES = [
-              "luci-app-openclash",
-              "luci-app-autoreboot",
-              "luci-app-mini-diskmanager",
-              "luci-app-natmapt",
-              "luci-app-partexp",
-              "luci-app-samba4",
-              "luci-app-upnp",
-              "luci-app-wolultra",
-              "autosamba",
-              "luci-app-cpufreq",
-              "luci-app-passwall",
-              "luci-app-ttyd",
-              "luci-app-lucky",
-              "luci-app-smartdns",
-              "kmod-xdp-sockets-diag",
-              "kmod-sched-bpf",
-              "kmod-tcp-bbr",
-          ]
+cd "$TOPDIR"
 
-          # 以下五个软件包完全不集成
-          # 从所有配置文件中彻底删除对应配置项
-          REMOVE_PACKAGES = [
-              "dae",
-              "daed",
-              "daed-geoip",
-              "daed-geosite",
-              "luci-app-daede",
-          ]
+echo "TOPDIR: $TOPDIR"
 
-          # 非软件包配置项及插件子选项
-          ENABLE_OPTIONS = {
-              "CONFIG_LUCI_LANG_zh_Hans": "y",
-              "CONFIG_TARGET_ROOTFS_PARTSIZE": "512",
-              "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadow_TLS": "y",
-              "CONFIG_DEVEL": "y",
-              "CONFIG_KERNEL_DEBUG_INFO_REDUCED": "n",
-              "CONFIG_KERNEL_DEBUG_INFO": "y",
-              "CONFIG_KERNEL_DEBUG_INFO_BTF": "y",
-              "CONFIG_KERNEL_CGROUPS": "y",
-              "CONFIG_KERNEL_CGROUP_BPF": "y",
-              "CONFIG_KERNEL_BPF_EVENTS": "y",
-              "CONFIG_KERNEL_XDP_SOCKETS": "y",
-              "CONFIG_BPF_TOOLCHAIN_NONE": "n",
-              "CONFIG_BPF_TOOLCHAIN_HOST": "y",
-              "CONFIG_BPF_TOOLCHAIN_BUILD_LLVM": "n",
-          }
+###############################################################################
+# 1. 核心依赖与第三方源码拉取 (优先于扫描逻辑)
+###############################################################################
 
-          if not ROOT.is_dir():
-              sys.exit("错误：找不到仓库根目录下的 configs/ 目录。")
+echo
+echo "========================================"
+echo "拉取/更新 核心依赖与 PassWall 组件"
+echo "========================================"
 
-          # 只扫描 configs/ 目录直属的普通 .config 文件。
-          # 排除 .config.full.config，不递归扫描其他子目录。
-          files = sorted(
-              p for p in ROOT.glob("*.config")
-              if p.is_file()
-              and not p.name.endswith(".config.full.config")
-          )
+# 1.1 替换 Golang 为 27.x
+# if [ -d feeds/packages/lang/golang ]; then
+#     echo "删除旧 Golang"
+#     rm -rf feeds/packages/lang/golang
+# fi
+#
+# git clone \
+#     -b 27.x \
+#     --depth 1 \
+#     https://github.com/sbwml/packages_lang_golang \
+#     feeds/packages/lang/golang
 
-          print(f"配置目录：{ROOT}")
-          print(f"发现普通配置文件：{len(files)} 个")
-          print(f"运行模式：{'仅预览' if DRY_RUN else '实际修改'}")
+# 1.2 移除官方旧库
+# PassWall 已由 DIY1 拉取到 package/myapp，这里不重复拉取
+rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,v2ray-plugin,xray-plugin,geoview,shadow-tls,dae,daed}
+rm -rf feeds/luci/applications/luci-app-passwall
 
-          if len(files) != EXPECTED_CONFIG_COUNT:
-              sys.exit(
-                  f"安全检查失败：预期 {EXPECTED_CONFIG_COUNT} 个普通 .config，"
-                  f"实际发现 {len(files)} 个。为防止误修改，已停止运行。"
-              )
+# DIY1 已下载：
+# package/myapp/passwall-packages
+# package/myapp/passwall
+#
+# DIY2 不重复 Clone，以下仅保留原逻辑为注释
+# rm -rf package/passwall-packages package/passwall-luci
+# git clone --depth 1 https://github.com/Openwrt-Passwall/openwrt-passwall-packages package/passwall-packages
+# git clone --depth 1 https://github.com/Openwrt-Passwall/openwrt-passwall package/passwall-luci
 
-          if not files:
-              sys.exit("错误：没有找到可处理的配置文件。")
+# 1.3 关键：刷新并注册新拉取的包索引到编译环境
+echo "更新并安装新依赖索引..."
+./scripts/feeds install -p packages golang || true
+./scripts/feeds install -f microsocks || true
+./scripts/feeds install -a
 
-          def option_pattern(key):
-              return re.compile(
-                  r"^\s*(?:#\s*)?"
-                  + re.escape(key)
-                  + r"(?:=.*|\s+is not set)?\s*$"
-              )
+###############################################################################
+# 2. 第三方依赖预处理 (明确要求的移除项)
+###############################################################################
 
-          def update_options(original, desired, remove_keys):
-              lines = original.splitlines()
-              output = []
-              seen = set()
+echo
+echo "========================================"
+echo "第三方依赖预处理"
+echo "========================================"
 
-              # 需要彻底删除的软件包配置项
-              remove_patterns = [
-                  option_pattern(key)
-                  for key in remove_keys
-              ]
+REMOVE_OFFICIAL_DEPS=""
 
-              for line in lines:
-                  # 完全删除五个软件包的配置行
-                  if any(pattern.fullmatch(line) for pattern in remove_patterns):
-                      continue
+OFFICIAL_FEEDS="
+packages
+luci
+routing
+telephony
+store
+third
+"
 
-                  matched_key = None
+THIRD_PARTY_FEEDS="
+nas
+nas_luci
+jjm2473_apps
+kenzo
+small
+"
 
-                  for key in desired:
-                      if option_pattern(key).fullmatch(line):
-                          matched_key = key
-                          break
+package_entry_exists()
+{
+    local feed="$1"
+    local pkg="$2"
+    local entry="package/feeds/${feed}/${pkg}"
 
-                  if matched_key is None:
-                      output.append(line)
-                      continue
+    [ -e "$entry" ] || [ -L "$entry" ]
+}
 
-                  # 同一配置项只保留一行
-                  if matched_key in seen:
-                      continue
+remove_package_entry()
+{
+    local feed="$1"
+    local pkg="$2"
+    local entry="package/feeds/${feed}/${pkg}"
 
-                  output.append(f"{matched_key}={desired[matched_key]}")
-                  seen.add(matched_key)
+    if [ -e "$entry" ] || [ -L "$entry" ]; then
+        echo "删除安装入口: ${feed}/${pkg}"
+        rm -f "$entry"
+    fi
+}
 
-              # 缺失的配置项追加到文件末尾
-              for key, value in desired.items():
-                  if key not in seen:
-                      output.append(f"{key}={value}")
+package_makefile()
+{
+    local feed="$1"
+    local pkg="$2"
+    local makefile="package/feeds/${feed}/${pkg}/Makefile"
 
-              return "\n".join(output).rstrip("\n") + "\n"
+    if [ -f "$makefile" ]; then
+        readlink -f "$makefile" 2>/dev/null || true
+    fi
+}
 
-          desired = {
-              **{
-                  f"CONFIG_PACKAGE_{name}": "y"
-                  for name in ENABLE_PACKAGES
-              },
-              **ENABLE_OPTIONS,
-          }
+is_enabled()
+{
+    local pkg="$1"
 
-          # 需要删除的完整配置项名称
-          remove_keys = [
-              f"CONFIG_PACKAGE_{name}"
-              for name in REMOVE_PACKAGES
-          ]
+    grep -Eq \
+        "^CONFIG_PACKAGE_${pkg}=(y|m)" \
+        .config 2>/dev/null
+}
 
-          changed_files = []
+for pkg in $REMOVE_OFFICIAL_DEPS; do
+    [ -n "$pkg" ] || continue
+    echo "明确要求：移除官方依赖入口 -> $pkg"
 
-          for path in files:
-              original = path.read_text(encoding="utf-8")
-              updated = update_options(original, desired, remove_keys)
+    for official_feed in $OFFICIAL_FEEDS; do
+        remove_package_entry "$official_feed" "$pkg"
+    done
+done
 
-              # 二次检查：五个软件包的配置项不得残留
-              for key in remove_keys:
-                  if option_pattern(key).search(updated):
-                      sys.exit(
-                          f"安全检查失败：{path} 仍然存在禁止集成项 {key}"
-                      )
+###############################################################################
+# 3. 获取包版本函数定义
+###############################################################################
 
-              if updated == original:
-                  continue
+get_package_version()
+{
+    local makefile="$1"
+    local version=""
 
-              changed_files.append(path)
+    [ -f "$makefile" ] || {
+        echo "unknown"
+        return 0
+    }
 
-              print(f"\n{'=' * 72}")
-              print(f"文件：{path}")
-              print("-" * 72)
+    version="$(
+        sed -nE \
+            's/^[[:space:]]*PKG_VERSION[[:space:]]*:?=[[:space:]]*(.*)$/\1/p' \
+            "$makefile" |
+        head -n 1
+    )"
 
-              diff = difflib.unified_diff(
-                  original.splitlines(keepends=True),
-                  updated.splitlines(keepends=True),
-                  fromfile=f"a/{path}",
-                  tofile=f"b/{path}",
-              )
-              sys.stdout.writelines(diff)
+    if [ -z "$version" ]; then
+        version="$(
+            sed -nE \
+                's/^[[:space:]]*PKG_RELEASE[[:space:]]*:?=[[:space:]]*(.*)$/release-\1/p' \
+                "$makefile" |
+            head -n 1
+        )"
+    fi
 
-              if not DRY_RUN:
-                  path.write_text(updated, encoding="utf-8")
+    [ -n "$version" ] || version="unknown"
 
-          print("\n" + "=" * 72)
-          print(f"目标配置项：{len(desired)} 个")
-          print(f"完全不集成的软件包：{len(remove_keys)} 个")
-          print(f"需要修改的文件：{len(changed_files)} 个")
-          print(f"未变化的文件：{len(files) - len(changed_files)} 个")
+    echo "$version"
+}
 
-          if DRY_RUN:
-              print("\n预览完成：没有写入配置文件，也不会提交推送。")
-          else:
-              print("\n配置修改完成，准备进行安全校验和提交。")
+###############################################################################
+# 5. 扫描 package/myapp 真正的 Package
+###############################################################################
 
-          manifest = (
-              Path(os.environ.get("RUNNER_TEMP", "/tmp"))
-              / "changed-configs.txt"
-          )
-          manifest.write_text(
-              "".join(f"{p}\n" for p in changed_files),
-              encoding="utf-8",
-          )
-          PY
+echo
+echo "========================================"
+echo "扫描 DIY1 独立第三方插件"
+echo "========================================"
 
-      - name: Verify modified files
-        if: ${{ !inputs.DRY_RUN }}
-        env:
-          RUNNER_TEMP: ${{ runner.temp }}
-        run: |
-          python3 <<'PY'
-          import os
-          import subprocess
-          import sys
-          from pathlib import Path
+MYAPP_PACKAGES=""
 
-          manifest = Path(os.environ["RUNNER_TEMP"]) / "changed-configs.txt"
-          allowed = {
-              line.strip()
-              for line in manifest.read_text(encoding="utf-8").splitlines()
-              if line.strip()
-          }
+if [ -d package/myapp ]; then
 
-          result = subprocess.run(
-              ["git", "diff", "--name-only"],
-              capture_output=True,
-              text=True,
-              check=True,
-          )
+    while IFS= read -r pkg; do
 
-          changed = set(result.stdout.splitlines())
+        [ -n "$pkg" ] || continue
 
-          if changed != allowed:
-              print("安全检查失败：Git 变更清单与脚本修改清单不一致。")
-              print("Git 变更：", sorted(changed))
-              print("预期变更：", sorted(allowed))
-              sys.exit(1)
+        case "$pkg" in
+            *'('*|*')'*|*'/'*)
+                continue
+                ;;
+        esac
 
-          for filename in changed:
-              path = Path(filename)
+        MYAPP_PACKAGES="${MYAPP_PACKAGES}
+$pkg"
 
-              if (
-                  not filename.startswith("configs/")
-                  or path.parent != Path("configs")
-                  or not path.name.endswith(".config")
-                  or path.name.endswith(".config.full.config")
-              ):
-                  sys.exit(f"安全检查失败：禁止修改此文件：{filename}")
+        echo "✓ $pkg"
 
-          print(
-              f"安全检查通过：仅涉及 {len(changed)} 个 "
-              "configs/ 下的普通 .config 文件。"
-          )
-          PY
+    done < <(
+        find package/myapp \
+            -type f \
+            -name Makefile \
+            -print0 2>/dev/null |
+        xargs -0 -r sed -nE \
+            's/^[[:space:]]*define[[:space:]]+Package\/([A-Za-z0-9_.+@:-]+)[[:space:]]*$/\1/p' |
+        sort -u || true
+    )
 
-      - name: Commit and push
-        if: ${{ !inputs.DRY_RUN }}
-        env:
-          RUNNER_TEMP: ${{ runner.temp }}
-        run: |
-          python3 <<'PY'
-          import os
-          import subprocess
-          import sys
-          from pathlib import Path
+else
 
-          manifest = Path(os.environ["RUNNER_TEMP"]) / "changed-configs.txt"
-          files = [
-              line.strip()
-              for line in manifest.read_text(encoding="utf-8").splitlines()
-              if line.strip()
-          ]
+    echo "WARNING: package/myapp 不存在"
 
-          if not files:
-              print("配置没有变化，无需提交。")
-              sys.exit(0)
+fi
 
-          for filename in files:
-              subprocess.run(["git", "add", "--", filename], check=True)
+###############################################################################
+# 5.1 强制识别 VIKINGYFY UPnP
+#
+# luci-app-upnp 使用 luci.mk
+# miniupnpd 存在多个 Package 变体
+# 因此不能只依赖 define Package 扫描
+###############################################################################
 
-          staged = subprocess.run(
-              ["git", "diff", "--cached", "--name-only"],
-              capture_output=True,
-              text=True,
-              check=True,
-          ).stdout.splitlines()
+echo
+echo "========================================"
+echo "检查并识别 VIKINGYFY UPnP"
+echo "========================================"
 
-          if set(staged) != set(files):
-              sys.exit("安全检查失败：暂存文件与目标文件不一致，停止提交。")
+VIKINGYFY_UPNP_PACKAGES="
+luci-app-upnp
+miniupnpd
+"
 
-          subprocess.run(
-              ["git", "config", "user.name", "github-actions[bot]"],
-              check=True,
-          )
-          subprocess.run(
-              [
-                  "git", "config", "user.email",
-                  "41898282+github-actions[bot]@users.noreply.github.com"
-              ],
-              check=True,
-          )
+for pkg in $VIKINGYFY_UPNP_PACKAGES; do
 
-          subprocess.run(
-              ["git", "commit", "-m", "chore: update HINLINK config packages"],
-              check=True,
-          )
+    MYAPP_MAKEFILE="package/myapp/${pkg}/Makefile"
 
-          branch = os.environ.get("GITHUB_REF_NAME")
-          if not branch:
-              sys.exit("错误：无法确定当前分支。")
+    if [ ! -f "$MYAPP_MAKEFILE" ]; then
+        echo "ERROR: DIY1 未下载 UPnP 源码: $MYAPP_MAKEFILE"
+        exit 1
+    fi
 
-          subprocess.run(
-              ["git", "push", "origin", branch],
-              check=True,
-          )
+    case "
+$MYAPP_PACKAGES
+" in
+        *"
+$pkg
+"*)
+            echo "已识别: $pkg"
+            ;;
+        *)
+            MYAPP_PACKAGES="${MYAPP_PACKAGES}
+$pkg"
+            echo "补充识别: $pkg"
+            ;;
+    esac
 
-          print("配置已提交并推送。")
-          PY
+done
+
+###############################################################################
+# 6. 收集当前 .config 中实际启用的 Package
+###############################################################################
+
+echo
+echo "========================================"
+echo "读取当前 .config"
+echo "========================================"
+
+CONFIG_PACKAGES=""
+
+if [ -f .config ]; then
+
+    CONFIG_PACKAGES="$(
+        sed -nE \
+            's/^CONFIG_PACKAGE_([A-Za-z0-9_.+@:-]+)=(y|m)$/\1/p' \
+            .config |
+        sort -u
+    )"
+
+fi
+
+echo "当前启用的第三方/官方 Package 数量：$(printf '%s\n' "$CONFIG_PACKAGES" | sed '/^$/d' | wc -l)"
+
+###############################################################################
+# 7. 独立第三方插件优先
+###############################################################################
+
+echo
+echo "========================================"
+echo "独立第三方插件优先"
+echo "========================================"
+
+for pkg in $MYAPP_PACKAGES; do
+
+    [ -n "$pkg" ] || continue
+
+    echo
+    echo "检查独立第三方插件: $pkg"
+
+    MYAPP_MAKEFILE=""
+
+    while IFS= read -r -d '' mf; do
+
+        [ -f "$mf" ] || continue
+
+        if grep -Eq \
+            "^[[:space:]]*define[[:space:]]+Package/${pkg}([[:space:]]|\\))" \
+            "$mf" 2>/dev/null; then
+
+            MYAPP_MAKEFILE="$mf"
+            break
+
+        fi
+
+    done < <(
+        find package/myapp \
+            -type f \
+            -name Makefile \
+            -print0 2>/dev/null || true
+    )
+
+    # 兼容 luci.mk 和多变体包：
+    # 如果没有找到 define Package/${pkg}，
+    # 则按 package/myapp/${pkg}/Makefile 定位源码
+    if [ -z "$MYAPP_MAKEFILE" ] &&
+       [ -f "package/myapp/${pkg}/Makefile" ]; then
+
+        MYAPP_MAKEFILE="package/myapp/${pkg}/Makefile"
+
+    fi
+
+    if [ -n "$MYAPP_MAKEFILE" ]; then
+        MYAPP_VERSION="$(get_package_version "$MYAPP_MAKEFILE")"
+        echo "package/myapp 版本: $MYAPP_VERSION"
+    else
+        MYAPP_VERSION="unknown"
+        echo "WARNING: 未找到 package/myapp 对应 Makefile: $pkg"
+    fi
+
+    for feed in $THIRD_PARTY_FEEDS $OFFICIAL_FEEDS; do
+
+        if package_entry_exists "$feed" "$pkg"; then
+
+            MAKEFILE="$(package_makefile "$feed" "$pkg")"
+            VERSION="$(get_package_version "$MAKEFILE")"
+
+            echo "发现重复来源:"
+            echo "  $feed/$pkg"
+            echo "  版本: $VERSION"
+            echo "选择: package/myapp"
+            echo "原因: 独立第三方源码优先"
+
+            remove_package_entry "$feed" "$pkg"
+
+        fi
+
+    done
+
+done
+
+###############################################################################
+# 8. 第三方集合源优先 (THIRD_PARTY_FEEDS > OFFICIAL_FEEDS)
+###############################################################################
+
+echo
+echo "========================================"
+echo "第三方集合源优先"
+echo "========================================"
+
+for pkg in $CONFIG_PACKAGES; do
+
+    [ -n "$pkg" ] || continue
+
+    case "
+$MYAPP_PACKAGES
+" in
+        *"
+$pkg
+"*)
+            continue
+            ;;
+    esac
+
+    THIRD_SOURCE=""
+
+    for third_feed in $THIRD_PARTY_FEEDS; do
+
+        if package_entry_exists "$third_feed" "$pkg"; then
+            THIRD_SOURCE="$third_feed"
+            break
+        fi
+
+    done
+
+    [ -n "$THIRD_SOURCE" ] || continue
+
+    THIRD_MAKEFILE="$(package_makefile "$THIRD_SOURCE" "$pkg")"
+    THIRD_VERSION="$(get_package_version "$THIRD_MAKEFILE")"
+
+    echo
+    echo "发现第三方重复包: $pkg"
+    echo "第三方来源: ${THIRD_SOURCE}/${pkg}"
+    echo "第三方版本: $THIRD_VERSION"
+
+    for official_feed in $OFFICIAL_FEEDS; do
+
+        if package_entry_exists "$official_feed" "$pkg"; then
+
+            OFFICIAL_MAKEFILE="$(package_makefile "$official_feed" "$pkg")"
+            OFFICIAL_VERSION="$(get_package_version "$OFFICIAL_MAKEFILE")"
+
+            echo "官方来源: ${official_feed}/${pkg}"
+            echo "官方版本: $OFFICIAL_VERSION"
+
+            if [ "$THIRD_VERSION" = "$OFFICIAL_VERSION" ]; then
+                echo "版本相同 -> 选择: 第三方 ${THIRD_SOURCE}/${pkg}"
+            else
+                echo "版本不同 -> 选择: 第三方 ${THIRD_SOURCE}/${pkg}"
+                echo "原因: 第三方来源优先，不按版本号自动选择"
+            fi
+
+            remove_package_entry "$official_feed" "$pkg"
+
+        fi
+
+    done
+
+done
+
+###############################################################################
+# 9. SmartDNS Rust Makefile 修复
+###############################################################################
+
+echo
+echo "========================================"
+echo "修复 SmartDNS Rust Makefile"
+echo "========================================"
+
+if [ -f package/myapp/smartdns/package/openwrt/Makefile ]; then
+
+    sed -i \
+        's@include ../../lang/rust/rust-package.mk@include $(TOPDIR)/feeds/packages/lang/rust/rust-package.mk@g' \
+        package/myapp/smartdns/package/openwrt/Makefile
+
+    echo "已修复: package/myapp/smartdns/package/openwrt/Makefile"
+
+fi
+
+if [ -f package/myapp/smartdns/Makefile ]; then
+
+    sed -i \
+        's@include ../../lang/rust/rust-package.mk@include $(TOPDIR)/feeds/packages/lang/rust/rust-package.mk@g' \
+        package/myapp/smartdns/Makefile
+
+    echo "已修复: package/myapp/smartdns/Makefile"
+
+fi
+
+###############################################################################
+# 10. 自动添加 LuCI 中文语言包 (移除了内部 make defconfig)
+###############################################################################
+
+echo
+echo "========================================"
+echo "添加 LuCI 中文语言包"
+echo "========================================"
+
+if [ -f .config ]; then
+
+    for pkg in $(
+        grep '^CONFIG_PACKAGE_luci-app-.*=y' .config |
+        sed 's/^CONFIG_PACKAGE_//;s/=y//' |
+        sort -u
+    ); do
+
+        trans="luci-i18n-${pkg#luci-app-}"
+
+        if grep -q \
+            "^CONFIG_PACKAGE_${trans}-zh-cn=y" \
+            .config 2>/dev/null; then
+            continue
+        fi
+
+        if grep -rnq \
+            "Package.*${trans}-zh-cn" \
+            package feeds 2>/dev/null; then
+
+            echo "添加中文语言包: ${trans}-zh-cn"
+
+            echo \
+                "CONFIG_PACKAGE_${trans}-zh-cn=y" \
+                >> .config
+
+        fi
+
+    done
+
+fi
+
+###############################################################################
+# 11. conntrack 调优
+###############################################################################
+
+echo
+echo "========================================"
+echo "设置 conntrack"
+echo "========================================"
+
+sed -i \
+    '/^[[:space:]]*net\.netfilter\.nf_conntrack_max[[:space:]]*=/d' \
+    package/base-files/files/etc/sysctl.conf
+
+echo \
+    'net.netfilter.nf_conntrack_max=655550' \
+    >> package/base-files/files/etc/sysctl.conf
+
+echo "nf_conntrack_max = 655550"
+
+###############################################################################
+# 12. Wi-Fi 首次启动自动开启
+###############################################################################
+
+echo
+echo "========================================"
+echo "设置 Wi-Fi 首次启动自动开启"
+echo "========================================"
+
+mkdir -p files/etc/uci-defaults
+
+cat > files/etc/uci-defaults/zz-enable-wifi <<'EOF'
+#!/bin/sh
+
+. /lib/functions.sh
+
+[ -s /etc/config/wireless ] || wifi config
+
+if [ -s /etc/config/wireless ]; then
+
+    config_load wireless
+
+    enable_wifi()
+    {
+        local cfg="$1"
+        uci -q set "wireless.${cfg}.disabled=0"
+    }
+
+    config_foreach enable_wifi wifi-device
+    config_foreach enable_wifi wifi-iface
+
+    uci -q commit wireless
+
+fi
+
+exit 0
+EOF
+
+chmod +x files/etc/uci-defaults/zz-enable-wifi
+
+echo "Wi-Fi 首次启动自动开启已设置"
+
+###############################################################################
+# 13. 最终来源检查
+###############################################################################
+
+echo
+echo "========================================"
+echo "最终第三方插件来源检查"
+echo "========================================"
+
+for pkg in $MYAPP_PACKAGES; do
+
+    [ -n "$pkg" ] || continue
+
+    echo
+    echo "[$pkg]"
+
+    if [ -d package/myapp ]; then
+
+        FOUND_MYAPP=""
+
+        while IFS= read -r -d '' mf; do
+
+            [ -f "$mf" ] || continue
+
+            if grep -Eq \
+                "^[[:space:]]*define[[:space:]]+Package/${pkg}([[:space:]]|\\))" \
+                "$mf" 2>/dev/null; then
+
+                FOUND_MYAPP="$mf"
+                break
+
+            fi
+
+        done < <(
+            find package/myapp \
+                -type f \
+                -name Makefile \
+                -print0 2>/dev/null || true
+        )
+
+        # 兼容 luci.mk 和多变体包
+        if [ -z "$FOUND_MYAPP" ] &&
+           [ -f "package/myapp/${pkg}/Makefile" ]; then
+
+            FOUND_MYAPP="package/myapp/${pkg}/Makefile"
+
+        fi
+
+        if [ -n "$FOUND_MYAPP" ]; then
+
+            echo "  package/myapp"
+            echo "  Makefile: $FOUND_MYAPP"
+            echo "  version: $(get_package_version "$FOUND_MYAPP")"
+
+        fi
+
+    fi
+
+done
+
+###############################################################################
+# 13.1 VIKINGYFY UPnP 最终检查
+###############################################################################
+
+echo
+echo "========================================"
+echo "VIKINGYFY UPnP 最终检查"
+echo "========================================"
+
+for pkg in luci-app-upnp miniupnpd; do
+
+    echo
+    echo "检查: $pkg"
+
+    MYAPP_MAKEFILE="package/myapp/${pkg}/Makefile"
+
+    if [ ! -f "$MYAPP_MAKEFILE" ]; then
+        echo "ERROR: myapp UPnP 源码不存在: $MYAPP_MAKEFILE"
+        exit 1
+    fi
+
+    echo "✓ myapp 源码存在: $MYAPP_MAKEFILE"
+    echo "  版本: $(get_package_version "$MYAPP_MAKEFILE")"
+
+    FOUND_FEED_ENTRY=0
+
+    for feed in $THIRD_PARTY_FEEDS $OFFICIAL_FEEDS; do
+
+        if package_entry_exists "$feed" "$pkg"; then
+
+            echo "ERROR: 发现残留同名 feeds 入口: ${feed}/${pkg}"
+            FOUND_FEED_ENTRY=1
+
+        fi
+
+    done
+
+    if [ "$FOUND_FEED_ENTRY" -ne 0 ]; then
+        echo "ERROR: UPnP 来源检查失败"
+        exit 1
+    fi
+
+    echo "✓ 未发现同名 feeds 安装入口"
+    echo "✓ $pkg 优先使用 package/myapp 源码"
+
+done
+
+###############################################################################
+# 16. DIY2 完成
+###############################################################################
+
+echo
+echo "========================================"
+echo "DIY2 OK"
+echo "========================================"
