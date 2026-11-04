@@ -57,7 +57,6 @@ jobs:
               "kmod-xdp-sockets-diag",
               "kmod-sched-bpf",
               "kmod-tcp-bbr",
-              "dae",
           ]
 
           # 非软件包配置项及插件子选项
