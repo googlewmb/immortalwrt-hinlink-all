@@ -58,10 +58,6 @@ jobs:
               "kmod-sched-bpf",
               "kmod-tcp-bbr",
               "dae",
-              "daed",
-              "daed-geoip",
-              "daed-geosite",
-              "luci-app-daede",
           ]
 
           # 非软件包配置项及插件子选项
