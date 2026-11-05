@@ -34,9 +34,9 @@ https://github.com/pymumu/luci-app-smartdns.git \
 luci-app-smartdns
 
 # MosDNS
-git clone -b v5 --depth 1 \
-https://github.com/sbwml/luci-app-mosdns.git \
-mosdns
+#git clone -b v5 --depth 1 \
+#https://github.com/sbwml/luci-app-mosdns.git \
+#mosdns
 
 # V2Ray GeoData
 #git clone --depth 1 \
@@ -95,6 +95,42 @@ nikki
 #https://github.com/nikkinikki-org/OpenWrt-momo.git \
 #momo
 
+###############################################################################
+# dae / daed / luci-app-daede
+# 来源：https://github.com/kenzok8/openwrt-daede
+###############################################################################
+
+echo "下载 kenzok8/openwrt-daede"
+
+DAEDE_TMP=".openwrt-daede-src"
+
+git clone -b main --depth 1 \
+https://github.com/kenzok8/openwrt-daede.git \
+"$DAEDE_TMP"
+
+# 检查所需软件包目录
+for pkg in dae daed luci-app-daede; do
+    if [ ! -d "$DAEDE_TMP/$pkg" ]; then
+        echo "ERROR: openwrt-daede 缺少软件包目录: $pkg"
+        exit 1
+    fi
+
+    if [ -e "$pkg" ] || [ -L "$pkg" ]; then
+        echo "ERROR: 目标目录已存在，拒绝覆盖: package/myapp/$pkg"
+        exit 1
+    fi
+done
+
+# 将三个软件包放到 package/myapp 一级目录
+mv "$DAEDE_TMP/dae" ./dae
+mv "$DAEDE_TMP/daed" ./daed
+mv "$DAEDE_TMP/luci-app-daede" ./luci-app-daede
+
+# 删除临时仓库
+rm -rf "$DAEDE_TMP"
+
+echo "已添加 dae、daed、luci-app-daede"
+
 # Aurora
 #git clone -b master --depth 1 \
 #https://github.com/eamonxg/luci-theme-aurora.git \
@@ -131,7 +167,6 @@ echo "========================================"
 echo "下载 VIKINGYFY UPnP"
 echo "========================================"
 
-# 下载 VIKINGYFY packages
 git clone -b main --depth 1 \
 https://github.com/VIKINGYFY/packages.git \
 vikingyfy-packages
@@ -146,6 +181,14 @@ if [ ! -f vikingyfy-packages/miniupnpd/Makefile ]; then
     echo "ERROR: VIKINGYFY miniupnpd Makefile 不存在"
     exit 1
 fi
+
+# 检查目标目录，拒绝覆盖
+for pkg in luci-app-upnp miniupnpd; do
+    if [ -e "$pkg" ] || [ -L "$pkg" ]; then
+        echo "ERROR: 目标目录已存在，拒绝覆盖: package/myapp/$pkg"
+        exit 1
+    fi
+done
 
 # 复制两个完整软件包到 package/myapp
 cp -a vikingyfy-packages/luci-app-upnp \
@@ -186,6 +229,15 @@ echo 'src-git kenzo https://github.com/kenzok8/openwrt-packages.git' >> feeds.co
 echo 'src-git small https://github.com/kenzok8/small.git' >> feeds.conf.default
 # echo 'src-git small_package https://github.com/kenzok8/small-package.git' >> feeds.conf.default
 
+
+# rtp2httpd - IPTV 流媒体转发服务
+# 包含主程序、LuCI 管理界面及相关 OpenWrt 软件包
+# 官方仓库：https://github.com/stackia/rtp2httpd
+echo 'src-git rtp2httpd https://github.com/stackia/rtp2httpd.git;main' >> feeds.conf.default
+
+
+
+
 # Kiddin9
 #echo 'src-git kiddin9 https://github.com/kiddin9/op-packages.git' >> feeds.conf.default
 
@@ -194,19 +246,6 @@ echo 'src-git small https://github.com/kenzok8/small.git' >> feeds.conf.default
 
 # Modem
 # echo 'src-git modem https://github.com/FUjr/modem_feeds.git' >> feeds.conf.default
-
-###############################################################################
-# rtp2httpd - IPTV 流媒体转发服务
-#
-# 使用 stackia 官方 Feed
-# 云编译通过 feeds update / feeds install 获取软件包
-# 不克隆到 package/myapp
-###############################################################################
-
-echo 'src-git rtp2httpd https://github.com/stackia/rtp2httpd.git;main' >> feeds.conf.default
-
-echo "已添加 rtp2httpd 官方 Feed:"
-echo "https://github.com/stackia/rtp2httpd"
 
 echo "package/myapp:"
 find package/myapp \
