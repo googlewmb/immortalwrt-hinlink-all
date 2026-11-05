@@ -1,13 +1,12 @@
 #!/bin/bash
 #
-# DIY2 - H68K + iStoreOS 24.10
 #
 # 第三方插件 / 依赖 / 来源优先级处理
 #
 # 来源优先级：
 #   1. package/myapp 独立第三方源码
 #   2. DIY1 添加的第三方集合源
-#   3. iStoreOS / OpenWrt 官方 feeds
+#   3. 完整daede内核依赖
 #
 
 set -e
@@ -15,20 +14,16 @@ set -e
 echo "DIY2 - H68K + iStoreOS 24.10"
 echo "第三方插件 / 依赖 / 来源优先"
 
+
 ###############################################################################
 # 0. 基础目录
 ###############################################################################
 
-TOPDIR="${TOPDIR:-$(pwd)}"
-
-[ -d "$TOPDIR" ] || {
-    echo "ERROR: TOPDIR 不存在: $TOPDIR"
-    exit 1
-}
-
+[ -d "$TOPDIR" ] || TOPDIR="$(pwd)"
 cd "$TOPDIR"
 
 echo "TOPDIR: $TOPDIR"
+
 
 ###############################################################################
 # 1. 核心依赖与第三方源码拉取 (优先于扫描逻辑)
@@ -39,37 +34,22 @@ echo "========================================"
 echo "拉取/更新 核心依赖与 PassWall 组件"
 echo "========================================"
 
-# 1.1 替换 Golang 为 27.x
-# if [ -d feeds/packages/lang/golang ]; then
-#     echo "删除旧 Golang"
-#     rm -rf feeds/packages/lang/golang
-# fi
-#
-# git clone \
-#     -b 27.x \
-#     --depth 1 \
-#     https://github.com/sbwml/packages_lang_golang \
-#     feeds/packages/lang/golang
 
-# 1.2 移除官方旧库
-# PassWall 已由 DIY1 拉取到 package/myapp，这里不重复拉取
-rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,v2ray-plugin,xray-plugin,geoview,shadow-tls,dae,daed}
+# 1.2 移除官方旧库并拉取 PassWall
+rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,v2ray-plugin,xray-plugin,geoview,shadow-tls}
 rm -rf feeds/luci/applications/luci-app-passwall
 
-# DIY1 已下载：
-# package/myapp/passwall-packages
-# package/myapp/passwall
-#
-# DIY2 不重复 Clone，以下仅保留原逻辑为注释
-# rm -rf package/passwall-packages package/passwall-luci
-# git clone --depth 1 https://github.com/Openwrt-Passwall/openwrt-passwall-packages package/passwall-packages
-# git clone --depth 1 https://github.com/Openwrt-Passwall/openwrt-passwall package/passwall-luci
+rm -rf package/passwall-packages package/passwall-luci
+
+git clone --depth 1 https://github.com/Openwrt-Passwall/openwrt-passwall-packages package/passwall-packages
+git clone --depth 1 https://github.com/Openwrt-Passwall/openwrt-passwall package/passwall-luci
 
 # 1.3 关键：刷新并注册新拉取的包索引到编译环境
 echo "更新并安装新依赖索引..."
 ./scripts/feeds install -p packages golang || true
 ./scripts/feeds install -f microsocks || true
 ./scripts/feeds install -a
+
 
 ###############################################################################
 # 2. 第三方依赖预处理 (明确要求的移除项)
@@ -143,11 +123,11 @@ is_enabled()
 for pkg in $REMOVE_OFFICIAL_DEPS; do
     [ -n "$pkg" ] || continue
     echo "明确要求：移除官方依赖入口 -> $pkg"
-
     for official_feed in $OFFICIAL_FEEDS; do
         remove_package_entry "$official_feed" "$pkg"
     done
 done
+
 
 ###############################################################################
 # 3. 获取包版本函数定义
@@ -160,7 +140,7 @@ get_package_version()
 
     [ -f "$makefile" ] || {
         echo "unknown"
-        return
+        return 0
     }
 
     version="$(
@@ -184,6 +164,42 @@ get_package_version()
     echo "$version"
 }
 
+
+###############################################################################
+# 4. H68K DTS 处理
+###############################################################################
+
+# echo
+# echo "========================================"
+# echo "H68K DTS"
+# echo "========================================"
+
+# DTS_SOURCE="$GITHUB_WORKSPACE/test-istore/diy/H68K-DTS Linux6.1-6.6.dts"
+
+# if [ -f "$DTS_SOURCE" ]; then
+
+#     mkdir -p target/linux/rockchip/dts/rk3568
+#     mkdir -p target/linux/rockchip/files/arch/arm64/boot/dts/rockchip
+
+#     cp -f "$DTS_SOURCE" \
+#         target/linux/rockchip/dts/rk3568/rk3568-opc-h68k.dts
+
+#     cp -f "$DTS_SOURCE" \
+#         target/linux/rockchip/files/arch/arm64/boot/dts/rockchip/rk3568-opc-h68k.dts
+
+#     cp -f "$DTS_SOURCE" \
+#         target/linux/rockchip/files/arch/arm64/boot/dts/rockchip/rk3568-hinlink-opc-h68k.dts
+
+#     echo "H68K DTS 已复制"
+
+# else
+
+#     echo "WARNING: 未找到 H68K DTS:"
+#     echo "$DTS_SOURCE"
+
+# fi
+
+
 ###############################################################################
 # 5. 扫描 package/myapp 真正的 Package
 ###############################################################################
@@ -202,12 +218,12 @@ if [ -d package/myapp ]; then
         [ -n "$pkg" ] || continue
 
         case "$pkg" in
-            *'('*|*')'*|*'/'*)
+            '\( ('*|*' \))'|*'/'*)
                 continue
                 ;;
         esac
 
-        MYAPP_PACKAGES="${MYAPP_PACKAGES}
+        MYAPP_PACKAGES="$MYAPP_PACKAGES
 $pkg"
 
         echo "✓ $pkg"
@@ -227,6 +243,55 @@ else
     echo "WARNING: package/myapp 不存在"
 
 fi
+
+
+###############################################################################
+# 5.1 特殊识别 VIKINGYFY UPnP
+#
+# DIY1 下载的源码：
+#   package/myapp/luci-app-upnp
+#   package/myapp/miniupnpd
+#
+# luci-app-upnp 使用 luci.mk，普通 define Package 扫描可能漏掉。
+# miniupnpd 生成多个变体，必须按源码目录名识别。
+###############################################################################
+
+echo
+echo "========================================"
+echo "识别 VIKINGYFY UPnP 独立源码"
+echo "========================================"
+
+VIKINGYFY_UPNP_PACKAGES="
+luci-app-upnp
+miniupnpd
+"
+
+for pkg in $VIKINGYFY_UPNP_PACKAGES; do
+
+    MYAPP_MAKEFILE="package/myapp/${pkg}/Makefile"
+
+    if [ ! -f "$MYAPP_MAKEFILE" ]; then
+        echo "ERROR: DIY1 未下载 UPnP 源码：$MYAPP_MAKEFILE"
+        exit 1
+    fi
+
+    case "
+$MYAPP_PACKAGES
+" in
+        *"
+$pkg
+"*)
+            echo "已识别: $pkg"
+            ;;
+        *)
+            MYAPP_PACKAGES="$MYAPP_PACKAGES
+$pkg"
+            echo "补充识别: $pkg"
+            ;;
+    esac
+
+done
+
 
 ###############################################################################
 # 6. 收集当前 .config 中实际启用的 Package
@@ -252,8 +317,12 @@ fi
 
 echo "当前启用的第三方/官方 Package 数量：$(printf '%s\n' "$CONFIG_PACKAGES" | sed '/^$/d' | wc -l)"
 
+
 ###############################################################################
 # 7. 独立第三方插件优先
+#
+# 优先级：
+# package/myapp > 第三方集合源 > 官方 feeds
 ###############################################################################
 
 echo
@@ -270,12 +339,13 @@ for pkg in $MYAPP_PACKAGES; do
 
     MYAPP_MAKEFILE=""
 
+    # 优先寻找真正定义 Package/${pkg} 的 Makefile
     while IFS= read -r -d '' mf; do
 
         [ -f "$mf" ] || continue
 
-        if grep -Eq \
-            "^[[:space:]]*define[[:space:]]+Package/${pkg}([[:space:]]|\\))" \
+        if grep -q \
+            "^[[:space:]]*define[[:space:]]*Package/${pkg}[[:space:]]*$" \
             "$mf" 2>/dev/null; then
 
             MYAPP_MAKEFILE="$mf"
@@ -290,13 +360,24 @@ for pkg in $MYAPP_PACKAGES; do
             -print0 2>/dev/null || true
     )
 
+    # luci.mk 类型和多变体软件包回退到源码目录 Makefile
+    if [ -z "$MYAPP_MAKEFILE" ] &&
+       [ -f "package/myapp/${pkg}/Makefile" ]; then
+
+        MYAPP_MAKEFILE="package/myapp/${pkg}/Makefile"
+
+    fi
+
     if [ -n "$MYAPP_MAKEFILE" ]; then
         MYAPP_VERSION="$(get_package_version "$MYAPP_MAKEFILE")"
         echo "package/myapp 版本: $MYAPP_VERSION"
     else
         MYAPP_VERSION="unknown"
+        echo "WARNING: 未找到 package/myapp 对应 Makefile"
     fi
 
+    # 删除所有重复 feed 入口
+    # 保留 package/myapp 独立源码
     for feed in $THIRD_PARTY_FEEDS $OFFICIAL_FEEDS; do
 
         if package_entry_exists "$feed" "$pkg"; then
@@ -317,6 +398,7 @@ for pkg in $MYAPP_PACKAGES; do
     done
 
 done
+
 
 ###############################################################################
 # 8. 第三方集合源优先 (THIRD_PARTY_FEEDS > OFFICIAL_FEEDS)
@@ -387,6 +469,7 @@ $pkg
 
 done
 
+
 ###############################################################################
 # 9. SmartDNS Rust Makefile 修复
 ###############################################################################
@@ -415,6 +498,7 @@ if [ -f package/myapp/smartdns/Makefile ]; then
     echo "已修复: package/myapp/smartdns/Makefile"
 
 fi
+
 
 ###############################################################################
 # 10. 自动添加 LuCI 中文语言包 (移除了内部 make defconfig)
@@ -457,6 +541,7 @@ if [ -f .config ]; then
 
 fi
 
+
 ###############################################################################
 # 11. conntrack 调优
 ###############################################################################
@@ -476,8 +561,9 @@ echo \
 
 echo "nf_conntrack_max = 655550"
 
+
 ###############################################################################
-# 12. Wi-Fi 首次启动自动开启
+# 12. Wi-Fi 首次启动自动开启（更稳健）
 ###############################################################################
 
 echo
@@ -492,31 +578,43 @@ cat > files/etc/uci-defaults/zz-enable-wifi <<'EOF'
 
 . /lib/functions.sh
 
-[ -s /etc/config/wireless ] || wifi config
+# 等待无线配置真正出现（最多约 30 秒，适配 ath11k / IPQ 晚加载）
+i=0
+while [ $i -lt 30 ]; do
+    [ -s /etc/config/wireless ] && break
+    sleep 1
+    i=$((i + 1))
+done
 
-if [ -s /etc/config/wireless ]; then
+# 仍不存在则强制生成一次
+[ -s /etc/config/wireless ] || wifi config 2>/dev/null || true
 
-    config_load wireless
+[ -s /etc/config/wireless ] || exit 0
 
-    enable_wifi()
-    {
-        local cfg="$1"
-        uci -q set "wireless.${cfg}.disabled=0"
-    }
+config_load wireless
 
-    config_foreach enable_wifi wifi-device
-    config_foreach enable_wifi wifi-iface
+enable_all()
+{
+    local cfg="$1"
+    uci -q set "wireless.${cfg}.disabled=0"
+}
 
-    uci -q commit wireless
+# 同时处理 wifi-device 和 wifi-iface（兼容新旧 wifi-scripts）
+config_foreach enable_all wifi-device
+config_foreach enable_all wifi-iface
 
-fi
+uci -q commit wireless
+
+# 真正拉起无线
+wifi up 2>/dev/null || wifi 2>/dev/null || true
 
 exit 0
 EOF
 
 chmod +x files/etc/uci-defaults/zz-enable-wifi
 
-echo "Wi-Fi 首次启动自动开启已设置"
+echo "Wi-Fi 首次启动自动开启已设置（带等待 + wifi up）"
+
 
 ###############################################################################
 # 13. 最终来源检查
@@ -534,16 +632,17 @@ for pkg in $MYAPP_PACKAGES; do
     echo
     echo "[$pkg]"
 
-    if [ -d package/myapp ]; then
+    if [ -d "package/myapp" ]; then
 
         FOUND_MYAPP=""
 
+        # 优先检查实际 Package 定义
         while IFS= read -r -d '' mf; do
 
             [ -f "$mf" ] || continue
 
-            if grep -Eq \
-                "^[[:space:]]*define[[:space:]]+Package/${pkg}([[:space:]]|\\))" \
+            if grep -q \
+                "^[[:space:]]*define[[:space:]]*Package/${pkg}[[:space:]]*$" \
                 "$mf" 2>/dev/null; then
 
                 FOUND_MYAPP="$mf"
@@ -558,10 +657,23 @@ for pkg in $MYAPP_PACKAGES; do
                 -print0 2>/dev/null || true
         )
 
+        # luci.mk 类型和多变体包回退到源码目录 Makefile
+        if [ -z "$FOUND_MYAPP" ] &&
+           [ -f "package/myapp/${pkg}/Makefile" ]; then
+
+            FOUND_MYAPP="package/myapp/${pkg}/Makefile"
+
+        fi
+
         if [ -n "$FOUND_MYAPP" ]; then
 
             echo "  package/myapp"
+            echo "  Makefile: $FOUND_MYAPP"
             echo "  version: $(get_package_version "$FOUND_MYAPP")"
+
+        else
+
+            echo "  WARNING: 未找到对应的独立源码 Makefile"
 
         fi
 
@@ -569,8 +681,156 @@ for pkg in $MYAPP_PACKAGES; do
 
 done
 
+
 ###############################################################################
-# 16. DIY2 完成
+# 13.1 VIKINGYFY UPnP 最终检查
+###############################################################################
+
+echo
+echo "========================================"
+echo "VIKINGYFY UPnP 最终检查"
+echo "========================================"
+
+for pkg in $VIKINGYFY_UPNP_PACKAGES; do
+
+    echo
+    echo "检查: $pkg"
+
+    MYAPP_MAKEFILE="package/myapp/${pkg}/Makefile"
+
+    if [ ! -f "$MYAPP_MAKEFILE" ]; then
+        echo "ERROR: VIKINGYFY 源码不存在: $MYAPP_MAKEFILE"
+        exit 1
+    fi
+
+    echo "源码: $MYAPP_MAKEFILE"
+    echo "版本: $(get_package_version "$MYAPP_MAKEFILE")"
+
+    REMAINING=""
+
+    for feed in $THIRD_PARTY_FEEDS $OFFICIAL_FEEDS; do
+
+        if package_entry_exists "$feed" "$pkg"; then
+            REMAINING="$REMAINING ${feed}/${pkg}"
+        fi
+
+    done
+
+    if [ -n "$REMAINING" ]; then
+        echo "ERROR: 仍存在重复 feed 入口:$REMAINING"
+        exit 1
+    fi
+
+    echo "重复 feed 入口检查通过"
+
+done
+
+echo
+echo "VIKINGYFY UPnP 独立源码优先检查通过"
+
+
+###############################################################################
+# 14. IPQ60xx 内核大小修改 + SKB Recycler
+###############################################################################
+
+echo
+echo "========================================"
+echo "修改 IPQ60xx 内核大小 / 开启 SKB Recycler"
+echo "========================================"
+
+
+###############################################################################
+# 修改内核大小
+###############################################################################
+
+set_kernel_size() {
+
+    # LibWrt IPQ60xx 设备定义文件
+    image_file='./target/linux/qualcommax/image/ipq60xx.mk'
+
+    if [ ! -f "$image_file" ]; then
+        echo "WARNING: 未找到 $image_file"
+        return 0
+    fi
+
+    # Redmi AX5 JDCloud：6M -> 12M
+    sed -i \
+        '/^define Device\/redmi_ax5-jdcloud$/,/^endef$/ s/^\tKERNEL_SIZE := 6144k$/\tKERNEL_SIZE := 12288k/' \
+        "$image_file"
+
+    # Link NN6000 v1：6M -> 12M
+    # link_nn6000-v2 继承 link_nn6000-v1，因此 v2 同步为 12M
+    sed -i \
+        '/^define Device\/link_nn6000-v1$/,/^endef$/ s/^\tKERNEL_SIZE := 6144k$/\tKERNEL_SIZE := 12288k/' \
+        "$image_file"
+
+    # JDCloud RE-SS-01：6M -> 12M
+    sed -i \
+        '/^define Device\/jdcloud_re-ss-01$/,/^endef$/ s/^\tKERNEL_SIZE := 6144k$/\tKERNEL_SIZE := 12288k/' \
+        "$image_file"
+
+    # JDCloud RE-CS-02：6M -> 12M
+    sed -i \
+        '/^define Device\/jdcloud_re-cs-02$/,/^endef$/ s/^\tKERNEL_SIZE := 6144k$/\tKERNEL_SIZE := 12288k/' \
+        "$image_file"
+
+    # JDCloud RE-CS-07：6M -> 12M
+    sed -i \
+        '/^define Device\/jdcloud_re-cs-07$/,/^endef$/ s/^\tKERNEL_SIZE := 6144k$/\tKERNEL_SIZE := 12288k/' \
+        "$image_file"
+
+    # Linksys MR 公共定义：8M -> 12M
+    # MR7350 / MR7500 继承 Device/linksys_mr，因此同步为 12M
+    sed -i \
+        '/^define Device\/linksys_mr$/,/^endef$/ s/^\tKERNEL_SIZE := 8192k$/\tKERNEL_SIZE := 12288k/' \
+        "$image_file"
+
+    echo "IPQ60xx 内核大小修改完成"
+}
+
+
+###############################################################################
+# 开启内存回收补丁
+###############################################################################
+
+enable_skb_recycler() {
+
+    local config_file="$1"
+
+    if [ ! -f "$config_file" ]; then
+        echo "WARNING: 未找到配置文件: $config_file"
+        return 0
+    fi
+
+    # 防止重复配置
+    sed -i '/^CONFIG_KERNEL_SKB_RECYCLER=/d' "$config_file"
+    sed -i '/^CONFIG_KERNEL_SKB_RECYCLER_MULTI_CPU=/d' "$config_file"
+
+    cat >> "$config_file" <<EOF
+CONFIG_KERNEL_SKB_RECYCLER=y
+CONFIG_KERNEL_SKB_RECYCLER_MULTI_CPU=y
+EOF
+
+    echo "CONFIG_KERNEL_SKB_RECYCLER=y"
+    echo "CONFIG_KERNEL_SKB_RECYCLER_MULTI_CPU=y"
+}
+
+
+###############################################################################
+# 执行内核修改
+###############################################################################
+
+set_kernel_size
+
+if [ -f .config ]; then
+    enable_skb_recycler ".config"
+else
+    echo "WARNING: .config 不存在，跳过 SKB Recycler 配置"
+fi
+
+
+###############################################################################
+# 15. DIY2 完成
 ###############################################################################
 
 echo
