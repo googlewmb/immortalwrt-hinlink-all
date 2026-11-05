@@ -1,4 +1,3 @@
-
 #!/bin/bash
 #
 # DIY2 - H68K + iStoreOS 24.10
@@ -161,7 +160,7 @@ get_package_version()
 
     [ -f "$makefile" ] || {
         echo "unknown"
-        return 0
+        return
     }
 
     version="$(
@@ -230,50 +229,6 @@ else
 fi
 
 ###############################################################################
-# 5.1 强制识别 VIKINGYFY UPnP
-#
-# luci-app-upnp 使用 luci.mk
-# miniupnpd 存在多个 Package 变体
-# 因此不能只依赖 define Package 扫描
-###############################################################################
-
-echo
-echo "========================================"
-echo "检查并识别 VIKINGYFY UPnP"
-echo "========================================"
-
-VIKINGYFY_UPNP_PACKAGES="
-luci-app-upnp
-miniupnpd
-"
-
-for pkg in $VIKINGYFY_UPNP_PACKAGES; do
-
-    MYAPP_MAKEFILE="package/myapp/${pkg}/Makefile"
-
-    if [ ! -f "$MYAPP_MAKEFILE" ]; then
-        echo "ERROR: DIY1 未下载 UPnP 源码: $MYAPP_MAKEFILE"
-        exit 1
-    fi
-
-    case "
-$MYAPP_PACKAGES
-" in
-        *"
-$pkg
-"*)
-            echo "已识别: $pkg"
-            ;;
-        *)
-            MYAPP_PACKAGES="${MYAPP_PACKAGES}
-$pkg"
-            echo "补充识别: $pkg"
-            ;;
-    esac
-
-done
-
-###############################################################################
 # 6. 收集当前 .config 中实际启用的 Package
 ###############################################################################
 
@@ -335,22 +290,11 @@ for pkg in $MYAPP_PACKAGES; do
             -print0 2>/dev/null || true
     )
 
-    # 兼容 luci.mk 和多变体包：
-    # 如果没有找到 define Package/${pkg}，
-    # 则按 package/myapp/${pkg}/Makefile 定位源码
-    if [ -z "$MYAPP_MAKEFILE" ] &&
-       [ -f "package/myapp/${pkg}/Makefile" ]; then
-
-        MYAPP_MAKEFILE="package/myapp/${pkg}/Makefile"
-
-    fi
-
     if [ -n "$MYAPP_MAKEFILE" ]; then
         MYAPP_VERSION="$(get_package_version "$MYAPP_MAKEFILE")"
         echo "package/myapp 版本: $MYAPP_VERSION"
     else
         MYAPP_VERSION="unknown"
-        echo "WARNING: 未找到 package/myapp 对应 Makefile: $pkg"
     fi
 
     for feed in $THIRD_PARTY_FEEDS $OFFICIAL_FEEDS; do
@@ -614,70 +558,14 @@ for pkg in $MYAPP_PACKAGES; do
                 -print0 2>/dev/null || true
         )
 
-        # 兼容 luci.mk 和多变体包
-        if [ -z "$FOUND_MYAPP" ] &&
-           [ -f "package/myapp/${pkg}/Makefile" ]; then
-
-            FOUND_MYAPP="package/myapp/${pkg}/Makefile"
-
-        fi
-
         if [ -n "$FOUND_MYAPP" ]; then
 
             echo "  package/myapp"
-            echo "  Makefile: $FOUND_MYAPP"
             echo "  version: $(get_package_version "$FOUND_MYAPP")"
 
         fi
 
     fi
-
-done
-
-###############################################################################
-# 13.1 VIKINGYFY UPnP 最终检查
-###############################################################################
-
-echo
-echo "========================================"
-echo "VIKINGYFY UPnP 最终检查"
-echo "========================================"
-
-for pkg in luci-app-upnp miniupnpd; do
-
-    echo
-    echo "检查: $pkg"
-
-    MYAPP_MAKEFILE="package/myapp/${pkg}/Makefile"
-
-    if [ ! -f "$MYAPP_MAKEFILE" ]; then
-        echo "ERROR: myapp UPnP 源码不存在: $MYAPP_MAKEFILE"
-        exit 1
-    fi
-
-    echo "✓ myapp 源码存在: $MYAPP_MAKEFILE"
-    echo "  版本: $(get_package_version "$MYAPP_MAKEFILE")"
-
-    FOUND_FEED_ENTRY=0
-
-    for feed in $THIRD_PARTY_FEEDS $OFFICIAL_FEEDS; do
-
-        if package_entry_exists "$feed" "$pkg"; then
-
-            echo "ERROR: 发现残留同名 feeds 入口: ${feed}/${pkg}"
-            FOUND_FEED_ENTRY=1
-
-        fi
-
-    done
-
-    if [ "$FOUND_FEED_ENTRY" -ne 0 ]; then
-        echo "ERROR: UPnP 来源检查失败"
-        exit 1
-    fi
-
-    echo "✓ 未发现同名 feeds 安装入口"
-    echo "✓ $pkg 优先使用 package/myapp 源码"
 
 done
 
