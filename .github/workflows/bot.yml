@@ -1,3 +1,4 @@
+
 name: Batch-Update-HINLINK-Configs
 
 on:
@@ -57,17 +58,15 @@ jobs:
               "kmod-xdp-sockets-diag",
               "kmod-sched-bpf",
               "kmod-tcp-bbr",
-          ]
-
-          # 以下五个软件包完全不集成
-          # 从所有配置文件中彻底删除对应配置项
-          REMOVE_PACKAGES = [
               "dae",
               "daed",
               "daed-geoip",
               "daed-geosite",
               "luci-app-daede",
           ]
+
+          # 以下软件包不再删除，统一通过 ENABLE_PACKAGES 设置为 y
+          REMOVE_PACKAGES = []
 
           # 非软件包配置项及插件子选项
           ENABLE_OPTIONS = {
@@ -130,7 +129,7 @@ jobs:
               ]
 
               for line in lines:
-                  # 完全删除五个软件包的配置行
+                  # 完全删除指定软件包的配置行
                   if any(pattern.fullmatch(line) for pattern in remove_patterns):
                       continue
 
@@ -179,7 +178,7 @@ jobs:
               original = path.read_text(encoding="utf-8")
               updated = update_options(original, desired, remove_keys)
 
-              # 二次检查：五个软件包的配置项不得残留
+              # 二次检查：禁止删除的软件包配置项不得残留
               for key in remove_keys:
                   if option_pattern(key).search(updated):
                       sys.exit(
