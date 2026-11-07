@@ -42,7 +42,7 @@ on:
         type: string
 
   schedule:
-    - cron: "16 9 * * *"
+    - cron: "16 08 * * *"
 
 env:
   OPENWRT_NAME: ImmortalWrt
