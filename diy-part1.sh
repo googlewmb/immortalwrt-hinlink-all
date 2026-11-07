@@ -235,6 +235,8 @@ echo 'src-git small https://github.com/kenzok8/small.git' >> feeds.conf.default
 # 官方仓库：https://github.com/stackia/rtp2httpd
 echo 'src-git rtp2httpd https://github.com/stackia/rtp2httpd.git;main' >> feeds.conf.default
 
+echo "已添加 rtp2httpd 官方 Feed:"
+echo "https://github.com/stackia/rtp2httpd"
 
 
 
