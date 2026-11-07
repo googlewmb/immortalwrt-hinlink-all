@@ -563,12 +563,12 @@ echo "nf_conntrack_max = 655550"
 
 
 ###############################################################################
-# 12. Wi-Fi 首次启动自动开启（更稳健）
+# 12. Wi-Fi 首次启动自动开启（强制 5G，适配 MT7921E + 25.12）
 ###############################################################################
 
 echo
 echo "========================================"
-echo "设置 Wi-Fi 首次启动自动开启"
+echo "设置 Wi-Fi 首次启动自动开启（强制 5G）"
 echo "========================================"
 
 mkdir -p files/etc/uci-defaults
@@ -578,42 +578,51 @@ cat > files/etc/uci-defaults/zz-enable-wifi <<'EOF'
 
 . /lib/functions.sh
 
-# 等待无线配置真正出现（最多约 30 秒，适配 ath11k / IPQ 晚加载）
-i=0
-while [ $i -lt 30 ]; do
-    [ -s /etc/config/wireless ] && break
-    sleep 1
-    i=$((i + 1))
-done
-
-# 仍不存在则强制生成一次
-[ -s /etc/config/wireless ] || wifi config 2>/dev/null || true
-
+[ -s /etc/config/wireless ] || wifi config
 [ -s /etc/config/wireless ] || exit 0
 
 config_load wireless
 
-enable_all()
-{
+# 处理所有 radio
+enable_radio() {
     local cfg="$1"
+
+    # 强制启用 + 指定 5G
     uci -q set "wireless.${cfg}.disabled=0"
+    uci -q delete "wireless.${cfg}.disabled"
+
+    uci -q set "wireless.${cfg}.band=5g"
+    uci -q set "wireless.${cfg}.channel=36"
+    uci -q set "wireless.${cfg}.htmode=HE80"
+    uci -q set "wireless.${cfg}.country=US"
+    uci -q set "wireless.${cfg}.cell_density=0"
 }
 
-# 同时处理 wifi-device 和 wifi-iface（兼容新旧 wifi-scripts）
-config_foreach enable_all wifi-device
-config_foreach enable_all wifi-iface
+# 处理所有接口
+enable_iface() {
+    local cfg="$1"
+
+    uci -q set "wireless.${cfg}.disabled=0"
+    uci -q delete "wireless.${cfg}.disabled"
+    # 保持默认 SSID OpenWrt，加密 OWE（开放）
+}
+
+config_foreach enable_radio wifi-device
+config_foreach enable_iface wifi-iface
 
 uci -q commit wireless
 
-# 真正拉起无线
-wifi up 2>/dev/null || wifi 2>/dev/null || true
+# 立即重载
+wifi reload 2>/dev/null || wifi up 2>/dev/null || true
 
 exit 0
 EOF
 
 chmod +x files/etc/uci-defaults/zz-enable-wifi
 
-echo "Wi-Fi 首次启动自动开启已设置（带等待 + wifi up）"
+echo "已设置强制 5G 自动开启"
+echo "默认：band=5g / channel=36 / htmode=HE80 / country=US"
+
 
 
 ###############################################################################
