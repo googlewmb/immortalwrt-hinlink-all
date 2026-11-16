@@ -40,8 +40,6 @@ rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2sock
 rm -rf feeds/luci/applications/luci-app-passwall
 
 rm -rf package/passwall-packages package/passwall-luci
-# 删除官方过时的 fullcone 补丁（当前官方防火墙已内置 fullcone）
-rm -f package/network/config/firewall4/patches/001-firewall4-add-support-for-fullcone-nat.patch
 
 
 
@@ -54,6 +52,13 @@ echo "更新并安装新依赖索引..."
 ./scripts/feeds install -p packages golang || true
 ./scripts/feeds install -f microsocks || true
 ./scripts/feeds install -a
+
+
+
+
+# 删除官方过时的 fullcone 补丁（当前官方防火墙已内置 fullcone）
+rm -f package/network/config/firewall4/patches/001-firewall4-add-support-for-fullcone-nat.patch
+
 
 
 ###############################################################################
