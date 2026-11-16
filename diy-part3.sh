@@ -54,6 +54,136 @@ echo "更新并安装新依赖索引..."
 ./scripts/feeds install -a
 
 
+###############################################################################
+# 1.4 rtp2httpd 强制使用 stackia 官方 Feed
+#
+# 指定来源：
+#   feeds/rtp2httpd/openwrt-support/rtp2httpd
+#   feeds/rtp2httpd/openwrt-support/luci-app-rtp2httpd
+#
+# 处理方式：
+#   1. 检查 stackia 官方 Feed 源码
+#   2. 删除其他 feeds 中的同名安装入口
+#   3. 只从 stackia 官方 Feed 安装
+#   4. 验证实际软链接目标
+#   5. 检查其他 feeds 是否存在重复入口
+#
+# 不允许其他 feeds 覆盖。
+###############################################################################
+
+echo
+echo "========================================"
+echo "锁定 rtp2httpd 来源：stackia 官方 Feed"
+echo "========================================"
+
+RTP2HTTPD_PACKAGES="
+rtp2httpd
+luci-app-rtp2httpd
+"
+
+# 第一步：确认 stackia 官方 Feed 已更新
+if [ ! -d feeds/rtp2httpd ]; then
+    echo "ERROR: stackia 官方 rtp2httpd Feed 不存在"
+    exit 1
+fi
+
+# 第二步：确认官方软件包源码存在
+for pkg in $RTP2HTTPD_PACKAGES; do
+
+    SOURCE="feeds/rtp2httpd/openwrt-support/${pkg}"
+
+    if [ ! -f "${SOURCE}/Makefile" ]; then
+        echo "ERROR: stackia 官方 Feed 缺少 ${pkg}"
+        echo "检查路径: ${SOURCE}/Makefile"
+        exit 1
+    fi
+
+    echo "确认官方源码存在: ${SOURCE}"
+
+done
+
+# 第三步：删除其他 feeds 中的同名安装入口
+#
+# 注意：
+# 这里只删除 package/feeds 下的安装软链接，
+# 不删除 feeds 中的原始源码。
+#
+for pkg in $RTP2HTTPD_PACKAGES; do
+
+    for entry in package/feeds/*/"$pkg"; do
+
+        [ -e "$entry" ] || [ -L "$entry" ] || continue
+
+        feed="${entry#package/feeds/}"
+        feed="${feed%%/*}"
+
+        [ "$feed" = "rtp2httpd" ] && continue
+
+        echo "删除其他来源安装入口: ${feed}/${pkg}"
+
+        rm -rf "$entry"
+
+    done
+
+done
+
+# 第四步：只从 stackia 官方 Feed 安装
+./scripts/feeds install -p rtp2httpd \
+    rtp2httpd \
+    luci-app-rtp2httpd
+
+# 第五步：验证官方安装入口
+for pkg in $RTP2HTTPD_PACKAGES; do
+
+    STACKIA_ENTRY="package/feeds/rtp2httpd/${pkg}"
+    STACKIA_SOURCE="feeds/rtp2httpd/openwrt-support/${pkg}"
+
+    if [ ! -f "${STACKIA_ENTRY}/Makefile" ]; then
+        echo "ERROR: ${pkg} 官方安装入口不存在"
+        exit 1
+    fi
+
+    ENTRY_REAL="$(readlink -f "$STACKIA_ENTRY" 2>/dev/null || true)"
+    SOURCE_REAL="$(readlink -f "$STACKIA_SOURCE" 2>/dev/null || true)"
+
+    if [ -z "$ENTRY_REAL" ] || [ "$ENTRY_REAL" != "$SOURCE_REAL" ]; then
+        echo "ERROR: ${pkg} 实际来源不是 stackia 官方 Feed"
+        echo "安装入口: ${ENTRY_REAL}"
+        echo "官方源码: ${SOURCE_REAL}"
+        exit 1
+    fi
+
+    echo
+    echo "✓ ${pkg}"
+    echo "  指定来源: stackia/rtp2httpd"
+    echo "  实际路径: ${ENTRY_REAL}"
+
+done
+
+# 第六步：检查其他 feeds，不允许存在重复安装入口
+for pkg in $RTP2HTTPD_PACKAGES; do
+
+    for entry in package/feeds/*/"$pkg"; do
+
+        [ -e "$entry" ] || [ -L "$entry" ] || continue
+
+        feed="${entry#package/feeds/}"
+        feed="${feed%%/*}"
+
+        [ "$feed" = "rtp2httpd" ] && continue
+
+        echo "ERROR: ${pkg} 发现其他 Feed 重复入口：${feed}"
+        exit 1
+
+    done
+
+done
+
+echo
+echo "rtp2httpd stackia 官方来源锁定完成"
+
+
+
 
 
 # 删除官方过时的 fullcone 补丁（当前官方防火墙已内置 fullcone）
