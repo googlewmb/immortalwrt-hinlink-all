@@ -38,7 +38,7 @@ on:
       source_ref:
         description: '官方 ImmortalWrt 分支或 commit（默认 master）'
         required: false
-        default: 'master'
+        default: 'owrt'
         type: string
 
   schedule:
